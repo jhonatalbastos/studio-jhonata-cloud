@@ -1,7 +1,6 @@
 import streamlit as st
 from datetime import date, timedelta
-import json
-import os
+from liturgia_generator import gerar_roteiro
 
 st.set_page_config(page_title="Studio Jhonata", layout="wide")
 
@@ -10,23 +9,42 @@ st.markdown("""
 **Vídeos Litúrgicos Automáticos GRÁTIS**
 """)
 
-# Sidebar simples
+# Sidebar – configuração básica
 st.sidebar.title("📅 Configurar")
-data_inicio = st.sidebar.date_input("Data Início", date.today())
-data_fim = st.sidebar.date_input("Data Fim", date.today() + timedelta(days=6))
-tipo = st.sidebar.selectbox("Tipo", ["Evangelho", "1ª Leitura", "Salmo", "2ª Leitura"])
 
-# Botão principal
+col1, col2 = st.sidebar.columns(2)
+data_inicio = col1.date_input("Data Início", date.today())
+data_fim = col2.date_input("Data Fim", date.today() + timedelta(days=6))
+
+tipo = st.sidebar.selectbox(
+    "Tipo de leitura",
+    ["Evangelho", "1ª Leitura", "Salmo", "2ª Leitura"]
+)
+
+# Botão principal (por enquanto só informativo)
 if st.sidebar.button("🚀 Gerar Vídeos", type="primary"):
     st.sidebar.success("✅ Adicionado na fila!")
-    st.success("Vídeos vão aparecer aqui em alguns minutos!")
+    st.success("Vídeos vão aparecer aqui em alguns minutos (próximo passo do projeto).")
 
-# Preview
+st.markdown("---")
+
+# Botão: Ver roteiro real de hoje
 if st.button("👀 Ver roteiro de hoje"):
-    st.write("**EVANGELHO**")
-    st.write("01/12/2025")
-    st.write("Mc 16:15-20")
-    st.write("• Leitura do dia")
-    st.write("• Reflexão") 
-    st.write("• Aplicação")
-    st.write("• Oração")
+    with st.spinner("Buscando Evangelho de hoje..."):
+        roteiro = gerar_roteiro(date.today(), tipo)
+
+    if not roteiro.get("partes"):
+        st.error("Não foi possível carregar a liturgia de hoje. Tente novamente mais tarde.")
+    else:
+        st.subheader(f"{roteiro['tipo']} - {roteiro['data']}")
+        if roteiro.get("referencia"):
+            st.write(f"Referência: {roteiro['referencia']}")
+        if roteiro.get("titulo"):
+            st.write(f"Título litúrgico: {roteiro['titulo']}")
+        st.markdown("---")
+
+        for parte in roteiro["partes"]:
+            st.markdown(f"### {parte['nome']}")
+            st.write(parte["texto"])
+            st.caption(parte["titulo_3l"].replace("\n", " | "))
+            st.markdown("---")
