@@ -1,6 +1,6 @@
 import streamlit as st
 from datetime import date, timedelta
-from liturgia_generator import gerar_roteiro
+# from liturgia_generator import gerar_roteiro
 
 st.set_page_config(page_title="Studio Jhonata", layout="wide")
 
