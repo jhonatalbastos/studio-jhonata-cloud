@@ -28,41 +28,6 @@ def inicializar_groq():
     return _client
 
 # =========================
-# Liturgia do dia (API)
-# =========================
-def buscar_liturgia_do_dia(data_str: str | None = None):
-    """Busca o Evangelho do dia na API litúrgica (apenas Católica)."""
-    if data_str is None:
-        data_str = date.today().strftime("%Y-%m-%d")
-
-    url = f"https://api.liturgia.net.br/liturgia?data={data_str}"
-
-    try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        dados = resp.json()
-
-        evangelho = None
-        for leitura in dados.get("leituras", []):
-            titulo = leitura.get("titulo", "")
-            if "Evangelho" in titulo or "evangelho" in titulo.lower():
-                evangelho = leitura
-                break
-
-        if not evangelho:
-            st.error("❌ Evangelho não encontrado para esta data.")
-            return None
-
-        return {
-            "titulo": evangelho.get("titulo", ""),
-            "referencia": evangelho.get("referencia", ""),
-            "texto": evangelho.get("texto", "")
-        }
-    except Exception as e:
-        st.error(f"❌ Erro ao buscar liturgia: {e}")
-        return None
-
-# =========================
 # Limpeza do texto bíblico
 # =========================
 def limpar_texto_evangelho(texto: str) -> str:
@@ -73,7 +38,159 @@ def limpar_texto_evangelho(texto: str) -> str:
     return texto_limpo.strip()
 
 # =========================
-# Geração do roteiro com Groq
+# API 1 – api-liturgia-diaria.vercel.app
+# =========================
+def buscar_liturgia_api1(data_str: str):
+    """
+    Usa API_LITURGIA_DIARIA (sagradaliturgia.com.br) via Vercel.
+    GET https://api-liturgia-diaria.vercel.app/today
+    ou /date/AAAA-MM-DD.
+    Estrutura vista no JSON anexado. [attached_file:1]
+    """
+    # A API aceita /today ou /date/AAAA-MM-DD – vamos usar /date para qualquer data.
+    url = f"https://api-liturgia-diaria.vercel.app/date/{data_str}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        dados = resp.json()
+
+        today = dados.get("today") or dados  # segurança
+        readings = today.get("readings", {})
+        gospel = readings.get("gospel", {})
+
+        texto = gospel.get("text", "")
+        titulo_head = gospel.get("head_title", "") or gospel.get("title", "")
+        referencia = titulo_head if titulo_head else "Evangelho do dia"
+
+        if not texto:
+            return None
+
+        return {
+            "fonte": "api-liturgia-diaria.vercel.app",
+            "titulo": titulo_head,
+            "referencia": referencia,
+            "texto": texto,
+        }
+    except Exception:
+        return None
+
+# =========================
+# API 2 – Railway (Dancrf /liturgia-diaria)
+# =========================
+def buscar_liturgia_api2(data_str: str):
+    # API alternativa de liturgia diária. [web:56][web:92]
+    url = f"https://liturgia.up.railway.app/v2/{data_str}"
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        dados = resp.json()
+
+        lit = dados.get("liturgia", {})
+        ev = lit.get("evangelho") or lit.get("evangelho_do_dia") or {}
+        if not ev:
+            return None
+
+        texto = ev.get("texto", "") or ev.get("conteudo", "")
+        ref = ev.get("referencia", "") or ev.get("ref", "")
+        titulo = ev.get("titulo", "") or ev.get("titulo_evangelho", "")
+
+        if not texto:
+            return None
+
+        referencia = ref or titulo or "Evangelho do dia"
+
+        return {
+            "fonte": "liturgia.up.railway.app",
+            "titulo": titulo,
+            "referencia": referencia,
+            "texto": texto,
+        }
+    except Exception:
+        return None
+
+# =========================
+# Fallback – Groq gera Evangelho INTEIRO
+# =========================
+def gerar_evangelho_com_groq(data_str: str):
+    """
+    Quando nenhuma API de liturgia responde, pede ao Groq para gerar
+    UM texto completo de Evangelho para a liturgia católica daquele dia.
+    """
+    client = inicializar_groq()
+
+    system_prompt = (
+        "Você é um teólogo e liturgista católico.\n"
+        "Para a data informada, gere UMA proposta de Evangelho do dia, "
+        "EM TEXTO COMPLETO, como se fosse lido na Missa, sem números de versículos.\n\n"
+        "Responda APENAS neste formato, em português do Brasil:\n"
+        "REFERENCIA: Evangelho de Jesus Cristo segundo São ... [capítulo, versículos]\n"
+        "TEXTO: [texto completo do Evangelho, pronto para ser lido em voz alta, sem números de versículos]\n"
+    )
+
+    user_prompt = (
+        f"Data litúrgica: {data_str}.\n\n"
+        "Gere uma referência e o texto COMPLETO de um Evangelho apropriado para esse dia, "
+        "seguindo o formato acima, sem comentários adicionais."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.4,
+            max_tokens=800,
+        )
+        conteudo = resp.choices[0].message.content
+
+        ref_match = re.search(r"REFERENCIA:\s*(.+)", conteudo)
+        texto_match = re.search(r"TEXTO:\s*(.+)", conteudo, flags=re.DOTALL)
+
+        referencia = ref_match.group(1).strip() if ref_match else "Evangelho do dia"
+        texto = texto_match.group(1).strip() if texto_match else conteudo
+
+        return {
+            "fonte": "groq-fallback",
+            "titulo": "Evangelho do dia (gerado por IA)",
+            "referencia": referencia,
+            "texto": texto,
+        }
+    except Exception as e:
+        st.error(f"❌ Falha também no fallback do Groq para gerar o Evangelho: {e}")
+        return None
+
+# =========================
+# Função unificada de liturgia (com 2 APIs + Groq)
+# =========================
+def obter_evangelho_com_fallback(data_str: str):
+    """
+    Ordem:
+    1) api-liturgia-diaria.vercel.app
+    2) liturgia.up.railway.app
+    3) Groq gera Evangelho inteiro
+    """
+    ev = buscar_liturgia_api1(data_str)
+    if ev:
+        st.info("📡 Usando liturgia de api-liturgia-diaria.vercel.app")
+        return ev
+
+    ev = buscar_liturgia_api2(data_str)
+    if ev:
+        st.info("📡 Usando liturgia de liturgia.up.railway.app")
+        return ev
+
+    st.warning("⚠️ Nenhuma API de liturgia respondeu. Gerando Evangelho completo via Groq.")
+    ev = gerar_evangelho_com_groq(data_str)
+    if ev:
+        return ev
+
+    st.error("❌ Não foi possível obter o Evangelho, nem pelas APIs nem pelo Groq.")
+    return None
+
+# =========================
+# Roteiro com Groq (Hook + 4 partes)
 # =========================
 def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
     """Gera HOOK, Leitura, Reflexão, Aplicação e Oração usando Groq."""
@@ -100,7 +217,7 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
 
         user_prompt = (
             f"Evangelho do dia: {referencia}\n\n"
-            f"Texto (apenas para contexto, não repita os números de versículos):\n{texto_limpo[:2000]}\n\n"
+            f"Texto (sem números de versículos):\n{texto_limpo[:2000]}\n\n"
             "Gere o roteiro completo no formato exato pedido."
         )
 
@@ -116,7 +233,6 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
 
         texto_gerado = resposta.choices[0].message.content
 
-        # Parse das partes usando regex simples
         partes = {}
         secoes = ["HOOK", "LEITURA", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
         for secao in secoes:
@@ -139,13 +255,11 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
 st.title("✨ Studio Jhonata - Automação Litúrgica")
 st.markdown("---")
 
-# Sidebar
 st.sidebar.title("⚙️ Configurações")
-st.sidebar.markdown("**APIs ativas:**")
-st.sidebar.success("✅ Groq (roteiro IA)")
-st.sidebar.success("✅ Liturgia Católica (Evangelho do dia)")
+st.sidebar.markdown("**APIs de liturgia (ordem de uso):**")
+st.sidebar.info("1️⃣ api-liturgia-diaria.vercel.app\n2️⃣ liturgia.up.railway.app\n3️⃣ Fallback: Groq gera Evangelho inteiro")
 st.sidebar.markdown("---")
-st.sidebar.markdown("Próximas etapas: TTS, vídeo vertical, legendas SRT.")
+st.sidebar.success("✅ Groq ativo para roteiro e fallback")
 
 tab1, tab2, tab3 = st.tabs(["📖 Gerar Roteiro", "🎥 Fábrica de Vídeo", "📊 Histórico"])
 
@@ -166,13 +280,13 @@ with tab1:
     if st.button("🚀 Gerar Roteiro Completo", type="primary", use_container_width=True):
         data_str = data_selecionada.strftime("%Y-%m-%d")
 
-        with st.spinner("🔍 Buscando Evangelho do dia..."):
-            liturgia = buscar_liturgia_do_dia(data_str)
+        with st.spinner("🔍 Buscando/gerando Evangelho do dia..."):
+            liturgia = obter_evangelho_com_fallback(data_str)
 
         if not liturgia:
             st.stop()
 
-        st.success(f"✅ Evangelho encontrado: **{liturgia['referencia']}**")
+        st.success(f"✅ Evangelho utilizado: **{liturgia['referencia']}** ({liturgia['fonte']})")
 
         with st.spinner("🤖 Gerando roteiro com Groq..."):
             roteiro = gerar_roteiro_com_groq(liturgia["texto"], liturgia["referencia"])
@@ -219,13 +333,13 @@ with tab1:
         with col_b2:
             st.markdown("**👉 Depois: usar na Fábrica de Vídeo**")
 
-        # Salva no histórico da sessão
         if "historico" not in st.session_state:
             st.session_state["historico"] = []
         st.session_state["historico"].append(
             {
                 "data": data_selecionada,
                 "referencia": liturgia["referencia"],
+                "fonte": liturgia["fonte"],
                 "roteiro": roteiro,
             }
         )
@@ -251,15 +365,14 @@ with tab3:
     if not historico:
         st.info("Nenhum roteiro gerado ainda nesta sessão.")
     else:
-        for item in reversed(historico[-10:]):  # mostra os últimos 10
+        for item in reversed(historico[-10:]):
             with st.expander(
-                f"📅 {item['data'].strftime('%d/%m/%Y')} - {item['referencia']}"
+                f"📅 {item['data'].strftime('%d/%m/%Y')} - {item['referencia']} ({item['fonte']})"
             ):
                 r = item["roteiro"]
                 st.markdown(f"**HOOK:** {r['hook']}")
-                st.markdown(f"**LEITURA (início):** {r['leitura'][:200]}...")
-                st.markdown(f"**REFLEXÃO (início):** {r['reflexão'][:200]}...")
+                st.markdown(f"**Leitura (início):** {r['leitura'][:200]}...")
+                st.markdown(f"**Reflexão (início):** {r['reflexão'][:200]}...")
 
-# --------- RODAPÉ ----------
 st.markdown("---")
 st.markdown("Feito com ❤️ para a evangelização - Studio Jhonata")
