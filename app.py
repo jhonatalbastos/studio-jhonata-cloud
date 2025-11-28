@@ -48,7 +48,7 @@ def buscar_liturgia_api1(data_str: str):
     Estrutura vista no JSON anexado. [attached_file:1]
     """
     # A API aceita /today ou /date/AAAA-MM-DD – vamos usar /date para qualquer data.
-    url = f"https://api-liturgia-diaria.vercel.app/date/{data_str}"
+    url = f"https://api-liturgia-diaria.vercel.app/?date={data_str}"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
