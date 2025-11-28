@@ -2,166 +2,197 @@ from datetime import date
 import re
 import requests
 import streamlit as st
-from groq import Groq  # Cliente oficial Groq [web:86][web:91]
+from groq import Groq
 
-# API pública de liturgia diária [web:43]
-API_LITURGIA = "https://api-liturgia-diaria.vercel.app/?date="
+# Carrega chave da API Groq dos Secrets do Streamlit
+@st.cache_data
+def carregar_chave_groq():
+    if "GROQ_API_KEY" not in st.secrets:
+        st.error("❌ Configure GROQ_API_KEY nas Secrets do Streamlit!")
+        st.stop()
+    return st.secrets["GROQ_API_KEY"]
 
+GROQ_API_KEY = carregar_chave_groq()
+client = Groq(api_key=GROQ_API_KEY)
 
-def limpar_versiculos(texto: str) -> str:
-    """
-    Remove números de versículos do Evangelho.
-    Exemplos: '1Jesus', '2Viu também', etc.
-    """
-    if not texto:
-        return ""
-
-    t = texto.replace("\n", " ").strip()
-    # Remove números colados no início das palavras (1Jesus, 20Quando...)
-    t = re.sub(r"\b(\d{1,3})(?=[A-Za-zÁ-Úá-ú])", "", t)
-    t = re.sub(r"\s{2,}", " ", t).strip()
-    return t
-
-
-def buscar_evangelho(data_obj: date):
-    """Busca Evangelho do dia na API e devolve dados básicos (texto já limpo)."""
-    data_str = data_obj.strftime("%Y-%m-%d")
+def buscar_liturgia_do_dia(data_str=None):
+    """Busca evangelho do dia via API litúrgica"""
+    if data_str is None:
+        data_str = date.today().strftime("%Y-%m-%d")
+    
+    url = f"https://api.liturgia.net.br/liturgia?data={data_str}"
+    
     try:
-        resp = requests.get(API_LITURGIA + data_str, timeout=10)
-        resp.raise_for_status()
-        dados = resp.json()
-
-        today = dados.get("today", {})
-        readings = today.get("readings", {})
-        gospel = readings.get("gospel")
-
-        if not gospel:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        dados = response.json()
+        
+        evangelho = None
+        for leitura in dados.get("leituras", []):
+            if "Evangelho" in leitura.get("titulo", "") or "evangelho" in leitura.get("titulo", "").lower():
+                evangelho = leitura
+                break
+        
+        if not evangelho:
+            st.error("❌ Evangelho não encontrado para esta data")
             return None
-
-        referencia = today.get("entry_title", "").strip()
-        titulo = gospel.get("head_title", "").strip() or gospel.get("title", "").strip()
-        texto = gospel.get("text", "").strip()
-
-        if not texto:
-            return None
-
-        texto_limpo = limpar_versiculos(texto)
-
+            
         return {
-            "referencia": referencia,
-            "titulo": titulo,
-            "texto": texto_limpo,
+            "titulo": evangelho.get("titulo", ""),
+            "referencia": evangelho.get("referencia", ""),
+            "texto": evangelho.get("texto", "")
         }
-    except Exception:
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar liturgia: {str(e)}")
         return None
 
+def limpar_texto_evangelho(texto):
+    """Remove números de versículos e limpa formatação"""
+    # Remove números de versículo [1], [2], 1:, 2: etc.
+    texto_limpo = re.sub(r'\[\d+\]', '', texto)
+    texto_limpo = re.sub(r'\d+\s*[:\-]\s*', '', texto_limpo)
+    texto_limpo = re.sub(r'\n\s*\n', '\n', texto_limpo)  # Remove linhas vazias extras
+    return texto_limpo.strip()
 
-def get_groq_client() -> Groq:
-    """Cria cliente do Groq usando a chave salva em st.secrets."""
-    api_key = st.secrets.get("GROQ_API_KEY", None)
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY não configurada em Secrets do Streamlit.")
-    return Groq(api_key=api_key)
+def gerar_roteiro_com_groq(texto_evangelho, referencia):
+    """Gera todo o roteiro usando Groq API"""
+    
+    texto_limpo = limpar_texto_evangelho(texto_evangelho)
+    
+    system_prompt = """Você é um criador de conteúdo católico para vídeos curtos (TikTok/Reels).
+    
+Crie um roteiro litúrgico em 5 partes perfeitas para vídeo vertical de 60-90 segundos:
 
+HOOK: 1-2 frases impactantes (5-8 seg) que criem curiosidade sobre o Evangelho
+LEITURA: "Proclamação do Evangelho de Jesus Cristo, segundo [evangelista]. [referência]. Glória a vós Senhor!" + texto limpo + "Palavra da Salvação. Glória a vós Senhor!"
+REFLEXÃO: Meditação profunda (20-25 seg, 2-3 frases) conectando Evangelho com vida espiritual
+APLICAÇÃO: "Evangelho na sua vida" - como aplicar HOJE (20-25 seg, prático e direto)
+ORAÇÃO: Oração curta e sincera baseada no Evangelho (20-25 seg)
 
-def gerar_partes_com_groq(evangelho_texto: str, referencia: str, data_str: str):
-    """
-    Usa Groq para gerar Reflexão, Aplicação e Oração com base no Evangelho.
-    Retorna um dicionário com os três textos.
-    """
-    client = get_groq_client()
+Formato EXATO:
+HOOK: [texto]
+LEITURA: [texto completo]
+REFLEXÃO: [texto]
+APLICAÇÃO: [texto]
+ORAÇÃO: [texto]
 
-    prompt_usuario = (
-        "Você é um roteirista católico, escrevendo para vídeos curtos "
-        "no estilo TikTok/Reels, em português do Brasil, com tom simples, devocional "
-        "e acolhedor.\n\n"
-        f"Evangelho do dia ({data_str}) - {referencia}:\n"
-        f"{evangelho_texto}\n\n"
-        "Com base neste Evangelho, gere três textos:\n"
-        "1) REFLEXÃO: um parágrafo de 3 a 5 frases, com aproximadamente 20 a 30 segundos de leitura em voz alta. "
-        "Ajude a pessoa a entender o que Jesus comunica com essa Palavra hoje.\n"
-        "2) APLICAÇÃO: um parágrafo de 3 a 5 frases, também com cerca de 20 a 30 segundos, "
-        "com sugestões bem práticas de como viver essa Palavra no dia a dia.\n"
-        "3) ORAÇÃO: uma oração espontânea, em primeira pessoa, com 3 a 5 frases, também em torno de 20 a 30 segundos.\n\n"
-        "Responda EXATAMENTE neste formato JSON, sem comentários e sem texto fora do JSON:\n"
-        "{\n"
-        '  \"reflexao\": \"...\",\n'
-        '  \"aplicacao\": \"...\",\n'
-        '  \"oracao\": \"...\"\n'
-        "}\n"
-    )
+Mantenha linguagem simples, devocional, acessível. Cada parte deve ter ~120-150 caracteres."""
 
-    chat = client.chat.completions.create(
-        model="llama-3.1-70b-versatile",  # modelo recomendado pela Groq [web:82][web:94]
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "Você ajuda a criar roteiros católicos para vídeos verticais. "
-                    "Sempre escreva em português do Brasil, de forma simples, calorosa e fiel ao espírito do Evangelho."
-                ),
-            },
-            {"role": "user", "content": prompt_usuario},
-        ],
-        temperature=0.7,
-        max_tokens=800,
-    )
+    user_prompt = f"""Evangelho do dia - {referencia}
 
-    content = chat.choices[0].message.content.strip()
+Texto: {texto_limpo}
 
-    # Tenta interpretar a resposta como JSON
-    import json
+Gere o roteiro completo no formato exato."""
 
     try:
-        dados = json.loads(content)
-        reflexao = dados.get("reflexao", "").strip()
-        aplicacao = dados.get("aplicacao", "").strip()
-        oracao = dados.get("oracao", "").strip()
-    except Exception:
-        # Se por algum motivo não vier JSON perfeito, usa tudo como reflexão
-        reflexao = content
-        aplicacao = ""
-        oracao = ""
+        resposta = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1200
+        )
+        
+        texto_gerado = resposta.choices[0].message.content
+        
+        # Extrai partes usando regex
+        partes = {}
+        secoes = ["HOOK", "LEITURA", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
+        
+        for secao in secoes:
+            pattern = rf"{secao}:\s*(.*?)(?={next((s for s in secoes if s != secao), 'FIM')}:|$)"
+            match = re.search(pattern, texto_gerado, re.DOTALL | re.IGNORECASE)
+            if match:
+                partes[secao.lower()] = match.group(1).strip()
+            else:
+                partes[secao.lower()] = f"[Parte {secao} não gerada]"
+        
+        return partes
+        
+    except Exception as e:
+        st.error(f"❌ Erro na geração com Groq: {str(e)}")
+        return None
 
-    return {
-        "reflexao": reflexao,
-        "aplicacao": aplicacao,
-        "oracao": oracao,
-    }
+def exibir_roteiro(roteiro):
+    """Exibe o roteiro formatado no Streamlit"""
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        st.markdown("## 📖 **ROTEIRO**")
+        st.markdown("---")
+        
+    with col2:
+        if roteiro:
+            st.markdown("### 🎣 **HOOK**")
+            st.markdown(f"**{roteiro.get('hook', '')}**")
+            st.markdown("---")
+            
+            st.markdown("### 📖 **LEITURA**")
+            st.markdown(roteiro.get('leitura', ''))
+            st.markdown("---")
+            
+            st.markdown("### 💭 **REFLEXÃO**")
+            st.markdown(roteiro.get('reflexão', ''))
+            st.markdown("---")
+            
+            st.markdown("### 🌟 **APLICAÇÃO**")
+            st.markdown(roteiro.get('aplicação', ''))
+            st.markdown("---")
+            
+            st.markdown("### 🙏 **ORAÇÃO**")
+            st.markdown(roteiro.get('oração', ''))
+            
+            # Botão para copiar
+            st.markdown("---")
+            if st.button("📋 Copiar todo o roteiro"):
+                texto_completo = (
+                    f"HOOK: {roteiro.get('hook', '')}\n\n"
+                    f"LEITURA: {roteiro.get('leitura', '')}\n\n"
+                    f"REFLEXÃO: {roteiro.get('reflexão', '')}\n\n"
+                    f"APLICAÇÃO: {roteiro.get('aplicação', '')}\n\n"
+                    f"ORAÇÃO: {roteiro.get('oração', '')}"
+                )
+                st.code(texto_completo)
+        else:
+            st.warning("⚠️ Nenhuma parte do roteiro foi gerada")
 
+# Interface principal
+def main():
+    st.set_page_config(page_title="Studio Jhonata", layout="wide")
+    st.title("✨ Studio Jhonata - Gerador Litúrgico IA")
+    st.markdown("---")
+    
+    col_data, col_status = st.columns(2)
+    
+    with col_data:
+        data_selecionada = st.date_input(
+            "📅 Selecione a data:",
+            value=date.today(),
+            min_value=date(2023, 1, 1)
+        )
+    
+    with col_status:
+        st.markdown("**Status:** ✅ Groq API configurada")
+    
+    if st.button("🚀 Gerar Roteiro Completo", type="primary"):
+        with st.spinner("🔍 Buscando liturgia..."):
+            liturgia = buscar_liturgia_do_dia(data_selecionada.strftime("%Y-%m-%d"))
+        
+        if liturgia:
+            st.success(f"✅ Evangelho encontrado: {liturgia['referencia']}")
+            
+            with st.spinner("🤖 Gerando com Groq..."):
+                roteiro = gerar_roteiro_com_groq(
+                    liturgia['texto'], 
+                    liturgia['referencia']
+                )
+            
+            exibir_roteiro(roteiro)
+        else:
+            st.error("Não foi possível gerar o roteiro")
 
-def gerar_roteiro(data_obj: date, tipo: str = "Evangelho"):
-    """
-    Monta o roteiro em 4 partes:
-      1) Hook + leitura completa com abertura e fechamento.
-      2) Reflexão (gerada pela IA Groq).
-      3) Aplicação (gerada pela IA Groq).
-      4) Oração (gerada pela IA Groq).
-    """
-    ev = buscar_evangelho(data_obj)
-    data_str = data_obj.strftime("%d/%m/%Y")
-
-    if not ev:
-        return {
-            "data": data_str,
-            "tipo": tipo,
-            "referencia": "",
-            "titulo": "",
-            "texto_completo": "",
-            "partes": []
-        }
-
-    referencia = ev["referencia"] or "Evangelho do dia"
-    titulo_liturgico = ev["titulo"] or "Evangelho de Jesus Cristo"
-    texto_evangelho = ev["texto"]
-
-    # Parte 1 – Hook + leitura + CTA (aqui ainda é fixa, mas usando texto real)
-    abertura = (
-        f"Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. "
-        f"{referencia}. Glória a vós, Senhor!"
-    )
-    fechamento = "Palavra da Salvação. Glória a vós, Senhor!"
-
-    hook_inicial = (
-        "Talvez você esteja vivendo um momento confuso, sem entender muito bem "
-        "o que Deus está fazendo na sua vida.
+if __name__ == "__main__":
+    main()
