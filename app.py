@@ -77,6 +77,17 @@ def extrair_referencia_biblica(titulo: str):
     }
 
 
+def formatar_referencia_curta(ref_biblica: dict | None) -> str:
+    """
+    Formata algo como:
+    Lucas, Cap. 21, 29-33
+    Se não tiver info, devolve string vazia.
+    """
+    if not ref_biblica:
+        return ""
+    return f"{ref_biblica['evangelista']}, Cap. {ref_biblica['capitulo']}, {ref_biblica['versiculos']}"
+
+
 # =========================
 # API 1 – api-liturgia-diaria.vercel.app (principal)
 # =========================
@@ -380,8 +391,11 @@ with tab1:
         leitura_montada = montar_leitura_com_formula(
             liturgia["texto"], liturgia.get("ref_biblica")
         )
+        ref_curta = formatar_referencia_curta(liturgia.get("ref_biblica"))
 
         st.markdown("## 📖 Roteiro pronto para gravar")
+        if ref_curta:
+            st.markdown(f"**Leitura:** {ref_curta}")
         st.markdown("---")
 
         col_esq, col_dir = st.columns(2)
@@ -429,6 +443,7 @@ with tab1:
                 "fonte": liturgia["fonte"],
                 "roteiro": roteiro,
                 "leitura": leitura_montada,
+                "ref_curta": ref_curta,
             }
         )
 
@@ -454,10 +469,14 @@ with tab3:
         st.info("Nenhum roteiro gerado ainda nesta sessão.")
     else:
         for item in reversed(historico[-10:]):
-            with st.expander(
+            ref_curta = item.get("ref_curta", "")
+            titulo_exp = (
                 f"📅 {item['data'].strftime('%d/%m/%Y')} - "
                 f"{item['referencia']} ({item['fonte']})"
-            ):
+            )
+            if ref_curta:
+                titulo_exp += f" • {ref_curta}"
+            with st.expander(titulo_exp):
                 r = item["roteiro"]
                 st.markdown(f"**HOOK:** {r['hook']}")
                 st.markdown(f"**Leitura (início):** {item['leitura'][:200]}...")
