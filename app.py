@@ -122,7 +122,6 @@ def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
         resultado = resp.choices[0].message.content
         personagens_detectados = {}
 
-        # PERSONAGENS já existentes
         m = re.search(r"PERSONAGENS:\s*(.+)", resultado)
         if m:
             nomes = [n.strip() for n in m.group(1).split(";") if n.strip()]
@@ -130,7 +129,6 @@ def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
                 if nome in banco_personagens:
                     personagens_detectados[nome] = banco_personagens[nome]
 
-        # NOVOS personagens
         m = re.search(r"NOVOS:\s*(.+)", resultado)
         if m:
             novos = m.group(1).strip()
@@ -142,7 +140,7 @@ def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
                     if not nome:
                         continue
                     personagens_detectados[nome] = desc
-                    banco_personagens[nome] = desc  # salva no banco
+                    banco_personagens[nome] = desc
 
         return personagens_detectados
     except Exception:
@@ -224,8 +222,20 @@ def obter_evangelho_com_fallback(data_str: str):
 
 
 # =========================
-# Roteiro + Prompts Visuais
+# Roteiro + Prompts Visuais (parse simples, campo a campo)
 # =========================
+def extrair_bloco(rotulo: str, texto: str) -> str:
+    padrao = rf"{rotulo}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
+    m = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
+def extrair_prompt(rotulo: str, texto: str) -> str:
+    padrao = rf"{rotulo}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
+    m = re.search(padrao, texto, re.DOTALL | re.IGNORECASE)
+    return m.group(1).strip() if m else ""
+
+
 def gerar_roteiro_com_prompts_groq(
     texto_evangelho: str, referencia_liturgica: str, personagens: dict
 ):
@@ -278,39 +288,26 @@ PROMPT_GERAL: [prompt para thumbnail/capa]"""
         )
 
         texto_gerado = resp.choices[0].message.content
+
         partes: dict[str, str] = {}
-        secoes = ["HOOK", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
 
-        for secao in secoes:
-            # Texto da seção
-            padrao_texto = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
-            match_texto = re.search(padrao_texto, texto_gerado, re.DOTALL | re.IGNORECASE)
-            if match_texto:
-                partes[secao.lower()] = match_texto.group(1).strip()
+        # Textos
+        partes["hook"] = extrair_bloco("HOOK", texto_gerado)
+        partes["reflexão"] = extrair_bloco("REFLEXÃO", texto_gerado)
+        partes["aplicação"] = extrair_bloco("APLICAÇÃO", texto_gerado)
+        partes["oração"] = extrair_bloco("ORAÇÃO", texto_gerado)
 
-            # Prompt da seção
-            padrao_prompt = rf"PROMPT_{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
-            match_prompt = re.search(
-                padrao_prompt, texto_gerado, re.DOTALL | re.IGNORECASE
-            )
-            if match_prompt:
-                partes[f"prompt_{secao.lower()}"] = match_prompt.group(1).strip()
+        # Prompts
+        partes["prompt_hook"] = extrair_prompt("PROMPT_HOOK", texto_gerado)
+        partes["prompt_reflexão"] = extrair_prompt("PROMPT_REFLEXÃO", texto_gerado)
+        partes["prompt_aplicacao"] = extrair_prompt("PROMPT_APLICACAO", texto_gerado)
+        partes["prompt_oração"] = extrair_prompt("PROMPT_ORACAO", texto_gerado)
+        partes["prompt_leitura"] = extrair_prompt("PROMPT_LEITURA", texto_gerado)
 
-        # Prompt da leitura
-        m_leitura = re.search(
-            r"PROMPT_LEITURA:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{3,}:\s*|\nPROMPT_|$)",
-            texto_gerado,
-            re.DOTALL | re.IGNORECASE,
-        )
-        if m_leitura:
-            partes["prompt_leitura"] = m_leitura.group(1).strip()
-
-        # Prompt geral (thumbnail)
         m_geral = re.search(
             r"PROMPT_GERAL:\s*(.+)", texto_gerado, re.DOTALL | re.IGNORECASE
         )
-        if m_geral:
-            partes["prompt_geral"] = m_geral.group(1).strip()
+        partes["prompt_geral"] = m_geral.group(1).strip() if m_geral else ""
 
         return partes
     except Exception as e:
@@ -346,7 +343,6 @@ st.sidebar.title("⚙️ Configurações")
 st.sidebar.info("1️⃣ api-liturgia-diaria\n2️⃣ liturgia.railway\n3️⃣ Groq fallback")
 st.sidebar.success("✅ Groq ativo")
 
-# Banco de personagens em sessão
 if "personagens_biblicos" not in st.session_state:
     st.session_state.personagens_biblicos = inicializar_personagens()
 
@@ -378,13 +374,11 @@ with tab1:
             f"✅ Evangelho: {liturgia['referencia_liturgica']} ({liturgia['fonte']})"
         )
 
-        # Personagens
         with st.spinner("🤖 Analisando personagens..."):
             personagens_detectados = analisar_personagens_groq(
                 liturgia["texto"], st.session_state.personagens_biblicos
             )
 
-        # Roteiro + prompts
         with st.spinner("✨ Gerando roteiro e prompts visuais..."):
             roteiro = gerar_roteiro_com_prompts_groq(
                 liturgia["texto"],
@@ -464,7 +458,6 @@ with tab2:
                 with col_a:
                     if st.button("💾 Salvar", key=f"salvar_{i}"):
                         if novo_nome and nova_desc:
-                            # remover antigo se renomear
                             if (
                                 novo_nome != nome
                                 and novo_nome
