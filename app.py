@@ -1,222 +1,265 @@
 import streamlit as st
-from datetime import date, timedelta
+from datetime import date
 import re
 import requests
 from groq import Groq
 
+# =========================
 # Configuração da página
+# =========================
 st.set_page_config(
-    page_title="Studio Jhonata", 
+    page_title="Studio Jhonata",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Cliente Groq lazy loading
+# =========================
+# Groq - cliente lazy
+# =========================
 _client = None
 
 def inicializar_groq():
     global _client
     if _client is None:
         if "GROQ_API_KEY" not in st.secrets:
-            st.error("❌ Configure GROQ_API_KEY nas Secrets do Streamlit!")
+            st.error("❌ Configure GROQ_API_KEY em Settings → Secrets no Streamlit Cloud.")
             st.stop()
         _client = Groq(api_key=st.secrets["GROQ_API_KEY"])
     return _client
 
-def buscar_liturgia_do_dia(data_str=None):
-    """Busca evangelho do dia via API litúrgica"""
+# =========================
+# Liturgia do dia (API)
+# =========================
+def buscar_liturgia_do_dia(data_str: str | None = None):
+    """Busca o Evangelho do dia na API litúrgica (apenas Católica)."""
     if data_str is None:
         data_str = date.today().strftime("%Y-%m-%d")
-    
+
     url = f"https://api.liturgia.net.br/liturgia?data={data_str}"
-    
+
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        dados = response.json()
-        
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        dados = resp.json()
+
+        evangelho = None
         for leitura in dados.get("leituras", []):
-            if "Evangelho" in leitura.get("titulo", "") or "evangelho" in leitura.get("titulo", "").lower():
-                return {
-                    "titulo": leitura.get("titulo", ""),
-                    "referencia": leitura.get("referencia", ""),
-                    "texto": leitura.get("texto", "")
-                }
-        st.error("❌ Evangelho não encontrado para esta data")
-        return None
+            titulo = leitura.get("titulo", "")
+            if "Evangelho" in titulo or "evangelho" in titulo.lower():
+                evangelho = leitura
+                break
+
+        if not evangelho:
+            st.error("❌ Evangelho não encontrado para esta data.")
+            return None
+
+        return {
+            "titulo": evangelho.get("titulo", ""),
+            "referencia": evangelho.get("referencia", ""),
+            "texto": evangelho.get("texto", "")
+        }
     except Exception as e:
-        st.error(f"❌ Erro ao buscar liturgia: {str(e)}")
+        st.error(f"❌ Erro ao buscar liturgia: {e}")
         return None
 
-def limpar_texto_evangelho(texto):
-    """Remove números de versículos e limpa formatação"""
-    texto_limpo = re.sub(r'\[\d+\]', '', texto)
-    texto_limpo = re.sub(r'\d+\s*[:\-]\s*', '', texto_limpo)
-    texto_limpo = re.sub(r'\n\s*\n', '\n', texto_limpo)
+# =========================
+# Limpeza do texto bíblico
+# =========================
+def limpar_texto_evangelho(texto: str) -> str:
+    """Remove números de versículos e espaços extras do texto do Evangelho."""
+    texto_limpo = re.sub(r"\[\d+\]", "", texto)              # remove [1], [2]...
+    texto_limpo = re.sub(r"\d+\s*[:\-]\s*", "", texto_limpo) # remove 1:1, 2-3...
+    texto_limpo = re.sub(r"\n\s*\n", "\n", texto_limpo)      # junta linhas vazias
     return texto_limpo.strip()
 
-def gerar_roteiro_com_groq(texto_evangelho, referencia):
-    """Gera todo o roteiro usando Groq API"""
+# =========================
+# Geração do roteiro com Groq
+# =========================
+def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
+    """Gera HOOK, Leitura, Reflexão, Aplicação e Oração usando Groq."""
     try:
         client = inicializar_groq()
         texto_limpo = limpar_texto_evangelho(texto_evangelho)
-        
-        system_prompt = """Você cria roteiros litúrgicos para vídeos TikTok/Reels católicos.
 
-Formato EXATO com 5 partes separadas por título:
-HOOK: 1-2 frases curtas criando curiosidade (5-8 seg)
-LEITURA: "Proclamação do Evangelho de Jesus Cristo, segundo [evangelista]. [referência]. Glória a vós Senhor!" + texto limpo + "Palavra da Salvação. Glória a vós Senhor!"
-REFLEXÃO: Meditação profunda (20-25 seg, 2-3 frases)
-APLICAÇÃO: "Evangelho na sua vida" - como aplicar HOJE (20-25 seg)
-ORAÇÃO: Oração curta e sincera (20-25 seg)
+        system_prompt = (
+            "Você cria roteiros católicos para vídeos curtos (TikTok/Reels) em português do Brasil.\n\n"
+            "Sempre responda EXATAMENTE neste formato, com 5 partes, cada uma iniciando com o título em maiúsculas:\n"
+            "HOOK: uma ou duas frases curtas (5-8 segundos) que criem curiosidade sobre o Evangelho.\n"
+            "LEITURA: 'Proclamação do Evangelho de Jesus Cristo, segundo [evangelista]. [referência]. Glória a vós, Senhor!' "
+            "+ o texto limpo do Evangelho adaptado para leitura em vídeo + 'Palavra da Salvação. Glória a vós, Senhor!'.\n"
+            "REFLEXÃO: meditação devocional de 20-25 segundos (2-3 frases) conectando o Evangelho com a vida espiritual.\n"
+            "APLICAÇÃO: 'Evangelho na sua vida hoje' em 20-25 segundos, bem prática.\n"
+            "ORAÇÃO: oração curta (20-25 segundos), simples e sincera, inspirada no Evangelho.\n\n"
+            "Formato exato da resposta (sem comentários adicionais):\n"
+            "HOOK: ...\n"
+            "LEITURA: ...\n"
+            "REFLEXÃO: ...\n"
+            "APLICAÇÃO: ...\n"
+            "ORAÇÃO: ..."
+        )
 
-Responda APENAS no formato:
-HOOK: [texto]
-LEITURA: [texto]
-REFLEXÃO: [texto]
-APLICAÇÃO: [texto]
-ORAÇÃO: [texto]"""
-
-        user_prompt = f"""Evangelho do dia - {referencia}
-
-Texto: {texto_limpo[:2000]}
-
-Gere o roteiro completo no formato exato."""
+        user_prompt = (
+            f"Evangelho do dia: {referencia}\n\n"
+            f"Texto (apenas para contexto, não repita os números de versículos):\n{texto_limpo[:2000]}\n\n"
+            "Gere o roteiro completo no formato exato pedido."
+        )
 
         resposta = client.chat.completions.create(
             model="llama3-70b-8192",
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_tokens=1200
+            max_tokens=1200,
         )
-        
+
         texto_gerado = resposta.choices[0].message.content
-        
-        # Parse das partes
+
+        # Parse das partes usando regex simples
         partes = {}
         secoes = ["HOOK", "LEITURA", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
-        
         for secao in secoes:
-            pattern = rf"{secao}:\s*([^LEITURA:|^REFLEXÃO:|^APLICAÇÃO:|^ORAÇÃO:|^HOOK:]+?)(?=\n[A-Z]{4,}[:\n]|$)"
-            match = re.search(pattern, texto_gerado, re.DOTALL | re.IGNORECASE)
+            padrao = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{3,}:\s*|$)"
+            match = re.search(padrao, texto_gerado, flags=re.DOTALL)
             if match:
                 partes[secao.lower()] = match.group(1).strip()
             else:
-                partes[secao.lower()] = f"[Parte {secao} não gerada pela IA]"
-        
+                partes[secao.lower()] = f"[Parte {secao} não foi gerada pela IA]"
+
         return partes
+
     except Exception as e:
-        st.error(f"❌ Erro Groq: {str(e)}")
+        st.error(f"❌ Erro ao gerar roteiro com Groq: {e}")
         return None
 
-# === INTERFACE PRINCIPAL ===
-st.title("✨ **Studio Jhonata** - Automação Litúrgica Completa")
+# =========================
+# Interface principal
+# =========================
+st.title("✨ Studio Jhonata - Automação Litúrgica")
 st.markdown("---")
 
 # Sidebar
 st.sidebar.title("⚙️ Configurações")
-st.sidebar.markdown("**✅ APIs Configuradas:**")
-st.sidebar.success("• Groq (Roteiro IA)")
-st.sidebar.success("• Liturgia.net.br")
+st.sidebar.markdown("**APIs ativas:**")
+st.sidebar.success("✅ Groq (roteiro IA)")
+st.sidebar.success("✅ Liturgia Católica (Evangelho do dia)")
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Próximas:** gTTS, MoviePy, Imagens IA")
+st.sidebar.markdown("Próximas etapas: TTS, vídeo vertical, legendas SRT.")
 
-# Tabs
-tab1, tab2, tab3 = st.tabs(["📖 Gerar Roteiro", "🎥 Fábrica Vídeo", "📊 Histórico"])
+tab1, tab2, tab3 = st.tabs(["📖 Gerar Roteiro", "🎥 Fábrica de Vídeo", "📊 Histórico"])
 
+# --------- TAB 1: GERAR ROTEIRO ----------
 with tab1:
-    st.header("🚀 Gerador de Roteiro IA Completo")
-    
+    st.header("🚀 Gerador de Roteiro Litúrgico com IA")
+
     col1, col2 = st.columns([2, 1])
     with col1:
         data_selecionada = st.date_input(
-            "📅 Data da liturgia:",
+            "📅 Selecione a data da liturgia:",
             value=date.today(),
-            min_value=date(2023, 1, 1)
+            min_value=date(2023, 1, 1),
         )
     with col2:
-        st.info("**Status:** ✅ Groq pronto")
-    
+        st.info("Status: ✅ pronto para gerar")
+
     if st.button("🚀 Gerar Roteiro Completo", type="primary", use_container_width=True):
-        with st.spinner("🔍 Buscando liturgia do dia..."):
-            liturgia = buscar_liturgia_do_dia(data_selecionada.strftime("%Y-%m-%d"))
-        
-        if liturgia:
-            st.success(f"✅ Evangelho encontrado: **{liturgia['referencia']}**")
-            
-            with st.spinner("🤖 Groq gerando roteiro personalizado..."):
-                roteiro = gerar_roteiro_com_groq(liturgia['texto'], liturgia['referencia'])
-            
-            if roteiro:
-                st.markdown("## 📖 **ROTEIRO PRONTO PARA GRAVAR**")
-                st.markdown("---")
-                
-                # Layout em colunas
-                col_hook_reflexao, col_leitura_app = st.columns(2)
-                
-                with col_hook_reflexao:
-                    st.markdown("### 🎣 **HOOK** (5-8s)")
-                    st.markdown(f"> **{roteiro.get('hook', '')}**")
-                    st.markdown("---")
-                    st.markdown("### 💭 **REFLEXÃO** (20-25s)")
-                    st.markdown(roteiro.get('reflexão', ''))
-                
-                with col_leitura_app:
-                    st.markdown("### 📖 **LEITURA COMPLETA**")
-                    st.markdown(roteiro.get('leitura', ''))
-                    st.markdown("---")
-                    st.markdown("### 🌟 **APLICAÇÃO** (20-25s)")
-                    st.markdown(roteiro.get('aplicação', ''))
-                
-                st.markdown("### 🙏 **ORAÇÃO FINAL** (20-25s)")
-                st.markdown(roteiro.get('oração', ''))
-                st.markdown("---")
-                
-                # Botões de ação
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    if st.button("📋 Copiar Todo Roteiro", use_container_width=True):
-                        texto_completo = (
-                            f"HOOK: {roteiro['hook']}\n\n"
-                            f"LEITURA: {roteiro['leitura']}\n\n"
-                            f"REFLEXÃO: {roteiro['reflexão']}\n\n"
-                            f"APLICAÇÃO: {roteiro['aplicação']}\n\n"
-                            f"ORAÇÃO: {roteiro['oração']}"
-                        )
-                        st.code(texto_completo)
-                        st.success("✅ Copiado!")
-                
-                with col_btn2:
-                    st.markdown("**👉 Próximo:** Fábrica de Vídeo")
-                
-                # Salvar histórico
-                if 'historico' not in st.session_state:
-                    st.session_state.historico = []
-                st.session_state.historico.append({
-                    'data': data_selecionada,
-                    'referencia': liturgia['referencia'],
-                    'roteiro': roteiro
-                })
-                st.balloons()
+        data_str = data_selecionada.strftime("%Y-%m-%d")
 
+        with st.spinner("🔍 Buscando Evangelho do dia..."):
+            liturgia = buscar_liturgia_do_dia(data_str)
+
+        if not liturgia:
+            st.stop()
+
+        st.success(f"✅ Evangelho encontrado: **{liturgia['referencia']}**")
+
+        with st.spinner("🤖 Gerando roteiro com Groq..."):
+            roteiro = gerar_roteiro_com_groq(liturgia["texto"], liturgia["referencia"])
+
+        if not roteiro:
+            st.stop()
+
+        st.markdown("## 📖 Roteiro pronto para gravar")
+        st.markdown("---")
+
+        col_esq, col_dir = st.columns(2)
+
+        with col_esq:
+            st.markdown("### 🎣 HOOK (5–8s)")
+            st.markdown(f"> **{roteiro.get('hook', '')}**")
+            st.markdown("---")
+
+            st.markdown("### 💭 REFLEXÃO (20–25s)")
+            st.markdown(roteiro.get("reflexão", ""))
+
+        with col_dir:
+            st.markdown("### 📖 LEITURA")
+            st.markdown(roteiro.get("leitura", ""))
+            st.markdown("---")
+
+            st.markdown("### 🌟 APLICAÇÃO (20–25s)")
+            st.markdown(roteiro.get("aplicação", ""))
+
+        st.markdown("### 🙏 ORAÇÃO (20–25s)")
+        st.markdown(roteiro.get("oração", ""))
+        st.markdown("---")
+
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            if st.button("📋 Copiar roteiro completo", use_container_width=True):
+                texto_completo = (
+                    f"HOOK: {roteiro['hook']}\n\n"
+                    f"LEITURA: {roteiro['leitura']}\n\n"
+                    f"REFLEXÃO: {roteiro['reflexão']}\n\n"
+                    f"APLICAÇÃO: {roteiro['aplicação']}\n\n"
+                    f"ORAÇÃO: {roteiro['oração']}"
+                )
+                st.code(texto_completo)
+        with col_b2:
+            st.markdown("**👉 Depois: usar na Fábrica de Vídeo**")
+
+        # Salva no histórico da sessão
+        if "historico" not in st.session_state:
+            st.session_state["historico"] = []
+        st.session_state["historico"].append(
+            {
+                "data": data_selecionada,
+                "referencia": liturgia["referencia"],
+                "roteiro": roteiro,
+            }
+        )
+
+# --------- TAB 2: FÁBRICA DE VÍDEO ----------
 with tab2:
-    st.header("🎥 Fábrica de Vídeo (Em Desenvolvimento)")
-    st.info("🔄 **Próximas entregas:**\n• TTS com gTTS\n• Imagens IA\n• Vídeo vertical MoviePy\n• Subtítulos SRT\n• Export TikTok/Reels")
-    st.button("🚧 Em breve!")
+    st.header("🎥 Fábrica de Vídeo (Em desenvolvimento)")
+    st.info(
+        "Aqui virão as próximas etapas:\n"
+        "- Geração de áudio com gTTS\n"
+        "- Geração de imagens de fundo\n"
+        "- Montagem do vídeo vertical (MoviePy)\n"
+        "- Geração de legendas SRT\n"
+        "- Export para TikTok / Reels"
+    )
+    st.button("🚧 Em breve", use_container_width=True)
 
+# --------- TAB 3: HISTÓRICO ----------
 with tab3:
-    st.header("📊 Histórico de Roteiros")
-    if 'historico' in st.session_state and st.session_state.historico:
-        for item in st.session_state.historico[-5:]:  # Últimos 5
-            with st.expander(f"📅 {item['data'].strftime('%d/%m/%Y')} - {item['referencia']}"):
-                st.markdown(f"**HOOK:** {item['roteiro']['hook']}")
-                st.markdown(f"**Leitura:** {item['roteiro']['leitura'][:150]}...")
-    else:
-        st.info("📝 Gere roteiros na primeira aba para ver histórico")
+    st.header("📊 Histórico de roteiros nesta sessão")
 
-# Footer
+    historico = st.session_state.get("historico", [])
+    if not historico:
+        st.info("Nenhum roteiro gerado ainda nesta sessão.")
+    else:
+        for item in reversed(historico[-10:]):  # mostra os últimos 10
+            with st.expander(
+                f"📅 {item['data'].strftime('%d/%m/%Y')} - {item['referencia']}"
+            ):
+                r = item["roteiro"]
+                st.markdown(f"**HOOK:** {r['hook']}")
+                st.markdown(f"**LEITURA (início):** {r['leitura'][:200]}...")
+                st.markdown(f"**REFLEXÃO (início):** {r['reflexão'][:200]}...")
+
+# --------- RODAPÉ ----------
 st.markdown("---")
-st.markdown("**✨ Studio Jhonata - Evangelização Automatizada** | Feito com ❤️ para Deus")
+st.markdown("Feito com ❤️ para a evangelização - Studio Jhonata")
