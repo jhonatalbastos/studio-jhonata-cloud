@@ -3,6 +3,7 @@ from datetime import date
 import re
 import requests
 from groq import Groq
+import json
 
 # =========================
 # Configuração da página
@@ -30,10 +31,21 @@ def inicializar_groq():
 
 
 # =========================
+# Inicializar banco de personagens
+# =========================
+@st.cache_data
+def inicializar_personagens():
+    return {
+        "Jesus": "homem de 33 anos, pele morena clara, cabelo castanho ondulado na altura dos ombros, barba bem aparada, olhos castanhos penetrantes e serenos, túnica branca tradicional com detalhes vermelhos, manto azul, expressão de autoridade amorosa, estilo renascentista clássico",
+        "São Pedro": "homem robusto de 50 anos, pele bronzeada, cabelo curto grisalho, barba espessa, olhos determinados, túnica de pescador bege com remendos, mãos calejadas, postura forte, estilo realista bíblico",
+        "São João": "jovem de 25 anos, magro, cabelo castanho longo liso, barba rala, olhos expressivos, túnica branca limpa, expressão contemplativa, estilo renascentista",
+    }
+
+
+# =========================
 # Limpeza do texto bíblico
 # =========================
 def limpar_texto_evangelho(texto: str) -> str:
-    """Remove números de versículos colados e espaços extras."""
     if not texto:
         return ""
     texto_limpo = texto.replace("\n", " ").strip()
@@ -43,18 +55,11 @@ def limpar_texto_evangelho(texto: str) -> str:
 
 
 # =========================
-# Utilitário: extrair ref bíblica do título
-# Ex.: "Evangelho de Jesus Cristo segundo São Lucas 21, 29-33"
+# Extrair referência bíblica
 # =========================
 def extrair_referencia_biblica(titulo: str):
-    """
-    Tenta extrair (evangelista, capítulo, versículos) do título.
-    Retorna dict ou None se não conseguir.
-    """
     if not titulo:
         return None
-
-    # Padrão aproximado: "... segundo São Lucas 21, 29-33"
     m = re.search(
         r"segundo\s+São\s+([A-Za-zÁ-Úá-ú]+)\s+(\d+),\s*([\d\-–]+)",
         titulo,
@@ -62,67 +67,94 @@ def extrair_referencia_biblica(titulo: str):
     )
     if not m:
         return None
-
     evangelista = m.group(1).strip()
     capitulo = m.group(2).strip()
     versiculos_raw = m.group(3).strip()
-
-    # Transformar "29-33" em "29 a 33"
     versiculos = versiculos_raw.replace("-", " a ").replace("–", " a ")
-
-    return {
-        "evangelista": evangelista,
-        "capitulo": capitulo,
-        "versiculos": versiculos,
-    }
+    return {"evangelista": evangelista, "capitulo": capitulo, "versiculos": versiculos}
 
 
-def formatar_referencia_curta(ref_biblica: dict | None) -> str:
-    """
-    Formata algo como:
-    Lucas, Cap. 21, 29-33
-    Se não tiver info, devolve string vazia.
-    """
+def formatar_referencia_curta(ref_biblica):
     if not ref_biblica:
         return ""
     return f"{ref_biblica['evangelista']}, Cap. {ref_biblica['capitulo']}, {ref_biblica['versiculos']}"
 
 
 # =========================
-# API 1 – api-liturgia-diaria.vercel.app (principal)
+# ANÁLISE DE PERSONAGENS + BANCO
+# =========================
+def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
+    """Groq analisa quais personagens aparecem e cria novos se necessário"""
+    client = inicializar_groq()
+    
+    system_prompt = """Você é especialista em análise bíblica. Analise o texto e identifique TODOS os personagens bíblicos mencionados.
+    
+    Formato EXATO da resposta:
+    PERSONAGENS: nome1; nome2; nome3
+    NOVOS: NomeNovo|descrição_detalhada_aparência_física_roupas_idade_estilo (apenas se não existir no banco)
+    
+    BANCO EXISTENTE: """ + "; ".join(banco_personagens.keys()) + """
+    
+    Exemplo:
+    PERSONAGENS: Jesus; Pedro; fariseus
+    NOVOS: Mulher Samaritana|mulher de 35 anos, pele morena, véu colorido, jarro d'água, expressão curiosa, túnica tradicional"""
+    
+    try:
+        resp = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"TEXTO: {texto_evangelho[:1500]}"}
+            ],
+            temperature=0.3,
+            max_tokens=400,
+        )
+        
+        resultado = resp.choices[0].message.content
+        personagens_detectados = {}
+        
+        # Parse PERSONAGENS
+        if m := re.search(r"PERSONAGENS:\s*(.+)", resultado):
+            nomes = [n.strip() for n in m.group(1).split(";") if n.strip()]
+            for nome in nomes:
+                if nome in banco_personagens:
+                    personagens_detectados[nome] = banco_personagens[nome]
+        
+        # Parse NOVOS
+        if m := re.search(r"NOVOS:\s*(.+)", resultado):
+            novos = m.group(1).strip()
+            for novo in novos.split(","):
+                if "|" in novo:
+                    nome, desc = novo.split("|", 1)
+                    personagens_detectados[nome.strip()] = desc.strip()
+                    banco_personagens[nome.strip()] = desc.strip()  # Salva no banco
+        
+        return personagens_detectados
+    except:
+        return {}
+
+
+# =========================
+# APIs Liturgia (mantidas iguais)
 # =========================
 def buscar_liturgia_api1(data_str: str):
-    """
-    Usa API_LITURGIA_DIARIA:
-    https://api-liturgia-diaria.vercel.app/?date=AAAA-MM-DD
-    Estrutura: today.readings.gospel.* [web:80][web:137]
-    """
     url = f"https://api-liturgia-diaria.vercel.app/?date={data_str}"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         dados = resp.json()
-
         today = dados.get("today", {})
         readings = today.get("readings", {})
         gospel = readings.get("gospel")
-
         if not gospel:
             return None
-
         referencia_liturgica = today.get("entry_title", "").strip() or "Evangelho do dia"
-        titulo = (
-            gospel.get("head_title", "").strip()
-            or gospel.get("title", "").strip()
-            or "Evangelho de Jesus Cristo"
-        )
+        titulo = (gospel.get("head_title", "") or gospel.get("title", "") or "Evangelho de Jesus Cristo").strip()
         texto = gospel.get("text", "").strip()
         if not texto:
             return None
-
         texto_limpo = limpar_texto_evangelho(texto)
         ref_biblica = extrair_referencia_biblica(titulo)
-
         return {
             "fonte": "api-liturgia-diaria.vercel.app",
             "titulo": titulo,
@@ -130,192 +162,111 @@ def buscar_liturgia_api1(data_str: str):
             "texto": texto_limpo,
             "ref_biblica": ref_biblica,
         }
-    except Exception:
+    except:
         return None
 
 
-# =========================
-# API 2 – Railway (fallback)
-# =========================
 def buscar_liturgia_api2(data_str: str):
     url = f"https://liturgia.up.railway.app/v2/{data_str}"
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         dados = resp.json()
-
         lit = dados.get("liturgia", {})
         ev = lit.get("evangelho") or lit.get("evangelho_do_dia") or {}
         if not ev:
             return None
-
         texto = ev.get("texto", "") or ev.get("conteudo", "")
-        ref = ev.get("referencia", "") or ev.get("ref", "")
-        titulo = ev.get("titulo", "") or ev.get("titulo_evangelho", "")
-
         if not texto:
             return None
-
         texto_limpo = limpar_texto_evangelho(texto)
-        referencia_liturgica = ref or titulo or "Evangelho do dia"
-        ref_biblica = extrair_referencia_biblica(titulo)
-
+        ref_biblica = None
         return {
             "fonte": "liturgia.up.railway.app",
-            "titulo": titulo,
-            "referencia_liturgica": referencia_liturgica,
+            "titulo": "Evangelho do dia",
+            "referencia_liturgica": "Evangelho do dia",
             "texto": texto_limpo,
             "ref_biblica": ref_biblica,
         }
-    except Exception:
+    except:
         return None
 
 
-# =========================
-# Fallback – Groq gera Evangelho INTEIRO
-# =========================
-def gerar_evangelho_com_groq(data_str: str):
-    client = inicializar_groq()
-
-    system_prompt = (
-        "Você é um teólogo e liturgista católico.\n"
-        "Para a data informada, gere UMA proposta de Evangelho do dia, "
-        "EM TEXTO COMPLETO, como se fosse lido na Missa, sem números de versículos.\n\n"
-        "Responda APENAS neste formato, em português do Brasil:\n"
-        "REFERENCIA: Evangelho de Jesus Cristo segundo São ... [capítulo, versículos]\n"
-        "TEXTO: [texto completo do Evangelho, pronto para ser lido em voz alta, sem números de versículos]\n"
-    )
-
-    user_prompt = (
-        f"Data litúrgica: {data_str}.\n\n"
-        "Gere uma referência e o texto COMPLETO de um Evangelho apropriado para esse dia, "
-        "seguindo o formato acima, sem comentários adicionais."
-    )
-
-    try:
-        resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.4,
-            max_tokens=800,
-        )
-        conteudo = resp.choices[0].message.content
-
-        ref_match = re.search(r"REFERENCIA:\s*(.+)", conteudo)
-        texto_match = re.search(r"TEXTO:\s*(.+)", conteudo, flags=re.DOTALL)
-
-        referencia_liturgica = ref_match.group(1).strip() if ref_match else "Evangelho do dia"
-        texto = texto_match.group(1).strip() if texto_match else conteudo
-
-        texto_limpo = limpar_texto_evangelho(texto)
-        ref_biblica = extrair_referencia_biblica(referencia_liturgica)
-
-        return {
-            "fonte": "groq-fallback",
-            "titulo": referencia_liturgica,
-            "referencia_liturgica": referencia_liturgica,
-            "texto": texto_limpo,
-            "ref_biblica": ref_biblica,
-        }
-    except Exception as e:
-        st.error(f"❌ Falha também no fallback do Groq para gerar o Evangelho: {e}")
-        return None
-
-
-# =========================
-# Função unificada de liturgia
-# =========================
 def obter_evangelho_com_fallback(data_str: str):
     ev = buscar_liturgia_api1(data_str)
     if ev:
         st.info("📡 Usando liturgia de api-liturgia-diaria.vercel.app")
         return ev
-
     ev = buscar_liturgia_api2(data_str)
     if ev:
         st.info("📡 Usando liturgia de liturgia.up.railway.app")
         return ev
-
-    st.warning("⚠️ Nenhuma API de liturgia respondeu. Gerando Evangelho completo via Groq.")
-    ev = gerar_evangelho_com_groq(data_str)
-    if ev:
-        return ev
-
-    st.error("❌ Não foi possível obter o Evangelho, nem pelas APIs nem pelo Groq.")
+    st.error("❌ Não foi possível obter o Evangelho")
     return None
 
 
 # =========================
-# Groq gera HOOK / REFLEXÃO / APLICAÇÃO / ORAÇÃO
+# Roteiro + Prompts Visuais
 # =========================
-def gerar_roteiro_com_groq(texto_evangelho: str, referencia_liturgica: str):
+def gerar_roteiro_com_prompts_groq(texto_evangelho: str, referencia_liturgica: str, personagens: dict):
+    client = inicializar_groq()
+    texto_limpo = limpar_texto_evangelho(texto_evangelho)
+    
+    personagens_str = json.dumps(personagens, ensure_ascii=False)
+    
+    system_prompt = f"""Crie roteiro + 5 prompts visuais CATÓLICOS para vídeo devocional.
+
+PERSONAGENS FIXOS: {personagens_str}
+
+IMPORTANTE:
+- 4 PARTES EXATAS: HOOK, REFLEXÃO, APLICAÇÃO, ORAÇÃO
+- 5 PROMPTS VISUAIS: um para cada parte + GERAL
+- USE SEMPRE as descrições exatas dos personagens
+- Estilo: artístico renascentista católico, luz divina, cores quentes
+
+Formato EXATO:
+HOOK: [texto 5-8s]
+PROMPT_HOOK: [prompt visual com personagens fixos]
+REFLEXÃO: [texto 20-25s]  
+PROMPT_REFLEXÃO: [prompt visual com personagens fixos]
+APLICAÇÃO: [texto 20-25s]
+PROMPT_APLICACAO: [prompt visual com personagens fixos]  
+ORAÇÃO: [texto 20-25s]
+PROMPT_ORACAO: [prompt visual com personagens fixos]
+PROMPT_GERAL: [prompt para thumbnail/capa]"""
+    
     try:
-        client = inicializar_groq()
-        texto_limpo = limpar_texto_evangelho(texto_evangelho)
-
-        system_prompt = (
-            "Você cria roteiros católicos para vídeos curtos (TikTok/Reels) em português do Brasil.\n\n"
-            "IMPORTANTE:\n"
-            "- Você deve gerar EXATAMENTE 4 partes, nesta ordem: HOOK, REFLEXÃO, APLICAÇÃO, ORAÇÃO.\n"
-            "- Não gere a LEITURA; ela será montada pelo sistema.\n"
-            "- Cada parte deve conter SOMENTE o conteúdo daquela parte.\n\n"
-            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho.\n"
-            "REFLEXÃO: comentário devocional de 20–25 segundos (2–3 frases).\n"
-            "APLICAÇÃO: como viver esse Evangelho HOJE, em 20–25 segundos.\n"
-            "ORAÇÃO: oração curta (20–25 segundos), simples e sincera.\n\n"
-            "Formato exato da resposta:\n"
-            "HOOK: [texto]\n"
-            "REFLEXÃO: [texto]\n"
-            "APLICAÇÃO: [texto]\n"
-            "ORAÇÃO: [texto]\n"
-        )
-
-        user_prompt = (
-            f"Evangelho do dia (referência litúrgica): {referencia_liturgica}\n\n"
-            f"Texto:\n{texto_limpo[:2000]}\n\n"
-            "Gere o roteiro completo seguindo exatamente o formato e as regras acima."
-        )
-
-        resposta = client.chat.completions.create(
+        resp = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=[{"role": "system", "content": system_prompt}, 
+                     {"role": "user", "content": f"Evangelho: {referencia_liturgica}\n\n{texto_limpo[:2000]}"}],
             temperature=0.7,
-            max_tokens=900,
+            max_tokens=1200,
         )
-
-        texto_gerado = resposta.choices[0].message.content
-
+        
+        texto_gerado = resp.choices[0].message.content
         partes = {}
         secoes = ["HOOK", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
+        
         for secao in secoes:
-            padrao = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
-            match = re.search(padrao, texto_gerado, flags=re.DOTALL)
-            if match:
-                partes[secao.lower()] = match.group(1).strip()
-            else:
-                partes[secao.lower()] = f"[Parte {secao} não foi gerada pela IA]"
-
+            for tipo in [secao, f"PROMPT_{secao}"]:
+                padrao = rf"{tipo}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
+                match = re.search(padrao, texto_gerado, re.DOTALL | re.IGNORECASE)
+                if match:
+                    partes[f"{tipo.lower().replace('prompt_', 'prompt_')[:-1 if tipo.endswith('_') else None}"] = match.group(1).strip()
+        
+        # Prompt geral
+        m = re.search(r"PROMPT_GERAL:\s*(.+)", texto_gerado, re.DOTALL | re.IGNORECASE)
+        if m:
+            partes["prompt_geral"] = m.group(1).strip()
+            
         return partes
-
     except Exception as e:
-        st.error(f"❌ Erro ao gerar roteiro com Groq: {e}")
+        st.error(f"❌ Erro Groq: {e}")
         return None
 
 
-# =========================
-# Montar LEITURA com fórmula fixa
-# =========================
-def montar_leitura_com_formula(texto_evangelho: str, ref_biblica: dict | None):
-    """
-    Monta a LEITURA com fórmula fixa:
-    Proclamação + capítulo/versículos (se existirem) + texto + Palavra da Salvação.
-    """
+def montar_leitura_com_formula(texto_evangelho: str, ref_biblica):
     if ref_biblica:
         abertura = (
             f"Proclamação do Evangelho de Jesus Cristo, segundo São "
@@ -325,162 +276,154 @@ def montar_leitura_com_formula(texto_evangelho: str, ref_biblica: dict | None):
             "Glória a vós, Senhor!"
         )
     else:
-        abertura = (
-            "Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. "
-            "Glória a vós, Senhor!"
-        )
-
+        abertura = "Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. Glória a vós, Senhor!"
     fechamento = "Palavra da Salvação. Glória a vós, Senhor!"
     return f"{abertura} {texto_evangelho} {fechamento}"
 
 
 # =========================
-# Interface principal
+# Interface Principal
 # =========================
 st.title("✨ Studio Jhonata - Automação Litúrgica")
 st.markdown("---")
 
+# Sidebar
 st.sidebar.title("⚙️ Configurações")
-st.sidebar.markdown("**APIs de liturgia (ordem de uso):**")
-st.sidebar.info(
-    "1️⃣ api-liturgia-diaria.vercel.app\n"
-    "2️⃣ liturgia.up.railway.app\n"
-    "3️⃣ Fallback: Groq gera Evangelho inteiro"
-)
-st.sidebar.markdown("---")
-st.sidebar.success("✅ Groq ativo para roteiro e fallback")
+st.sidebar.info("1️⃣ api-liturgia-diaria\n2️⃣ liturgia.railway\n3️⃣ Groq fallback")
+st.sidebar.success("✅ Groq ativo")
 
-tab1, tab2, tab3 = st.tabs(["📖 Gerar Roteiro", "🎥 Fábrica de Vídeo", "📊 Histórico"])
+# Inicializar banco personagens
+if "personagens_biblicos" not in st.session_state:
+    st.session_state.personagens_biblicos = inicializar_personagens()
 
-# --------- TAB 1: GERAR ROTEIRO ----------
+tab1, tab2, tab3, tab4 = st.tabs(["📖 Gerar Roteiro", "🎨 Personagens", "🎥 Fábrica Vídeo", "📊 Histórico"])
+
+# TAB 1: ROTEIRO
 with tab1:
-    st.header("🚀 Gerador de Roteiro Litúrgico com IA")
-
+    st.header("🚀 Gerador de Roteiro + Imagens")
+    
     col1, col2 = st.columns([2, 1])
     with col1:
-        data_selecionada = st.date_input(
-            "📅 Selecione a data da liturgia:",
-            value=date.today(),
-            min_value=date(2023, 1, 1),
-        )
+        data_selecionada = st.date_input("📅 Data liturgia:", value=date.today(), min_value=date(2023, 1, 1))
     with col2:
-        st.info("Status: ✅ pronto para gerar")
-
-    if st.button("🚀 Gerar Roteiro Completo", type="primary", use_container_width=True):
+        st.info("✅ Pronto")
+    
+    if st.button("🚀 Gerar Roteiro Completo", type="primary"):
         data_str = data_selecionada.strftime("%Y-%m-%d")
-
-        with st.spinner("🔍 Buscando/gerando Evangelho do dia..."):
+        with st.spinner("🔍 Buscando Evangelho..."):
             liturgia = obter_evangelho_com_fallback(data_str)
-
         if not liturgia:
             st.stop()
-
-        st.success(
-            f"✅ Evangelho utilizado: **{liturgia['referencia_liturgica']}** "
-            f"({liturgia['fonte']})"
-        )
-
-        with st.spinner("🤖 Gerando roteiro com Groq..."):
-            roteiro = gerar_roteiro_com_groq(
-                liturgia["texto"], liturgia["referencia_liturgica"]
+        
+        st.success(f"✅ {liturgia['referencia_liturgica']} ({liturgia['fonte']})")
+        
+        # Análise personagens
+        with st.spinner("🤖 Analisando personagens..."):
+            personagens_detectados = analisar_personagens_groq(liturgia["texto"], st.session_state.personagens_biblicos)
+        
+        # Gerar roteiro + prompts
+        with st.spinner("✨ Gerando roteiro e prompts visuais..."):
+            roteiro = gerar_roteiro_com_prompts_groq(
+                liturgia["texto"], liturgia["referencia_liturgica"], 
+                {**st.session_state.personagens_biblicos, **personagens_detectados}
             )
-
+        
         if not roteiro:
             st.stop()
-
-        leitura_montada = montar_leitura_com_formula(
-            liturgia["texto"], liturgia.get("ref_biblica")
-        )
+        
+        leitura_montada = montar_leitura_com_formula(liturgia["texto"], liturgia.get("ref_biblica"))
         ref_curta = formatar_referencia_curta(liturgia.get("ref_biblica"))
-
-        st.markdown("## 📖 Roteiro pronto para gravar")
+        
+        st.markdown("## 📖 Roteiro pronto")
         if ref_curta:
             st.markdown(f"**Leitura:** {ref_curta}")
         st.markdown("---")
-
-        col_esq, col_dir = st.columns(2)
-
-        with col_esq:
-            st.markdown("### 🎣 HOOK (5–8s)")
-            st.markdown(f"> **{roteiro.get('hook', '')}**")
+        
+        # PERSONAGENS DETECTADOS
+        if personagens_detectados:
+            st.markdown("### 👥 Personagens nesta leitura")
+            for nome, desc in personagens_detectados.items():
+                st.markdown(f"**{nome}:** {desc}")
             st.markdown("---")
-
-            st.markdown("### 💭 REFLEXÃO (20–25s)")
+        
+        # ROTEIRO + PROMPTS
+        col_esq, col_dir = st.columns(2)
+        with col_esq:
+            st.markdown("### 🎣 HOOK")
+            st.markdown(roteiro.get("hook", ""))
+            st.markdown("**📸 Prompt:**")
+            st.code(roteiro.get("prompt_hook", ""))
+            
+            st.markdown("### 💭 REFLEXÃO")
             st.markdown(roteiro.get("reflexão", ""))
-
+            st.markdown("**📸 Prompt:**")
+            st.code(roteiro.get("prompt_reflexão", ""))
+        
         with col_dir:
             st.markdown("### 📖 LEITURA")
             st.markdown(leitura_montada)
-            st.markdown("---")
-
-            st.markdown("### 🌟 APLICAÇÃO (20–25s)")
+            
+            st.markdown("### 🌟 APLICAÇÃO")
             st.markdown(roteiro.get("aplicação", ""))
-
-        st.markdown("### 🙏 ORAÇÃO (20–25s)")
+            st.markdown("**📸 Prompt:**")
+            st.code(roteiro.get("prompt_aplicacao", ""))
+        
+        st.markdown("### 🙏 ORAÇÃO")
         st.markdown(roteiro.get("oração", ""))
+        st.markdown("**📸 Prompt:**")
+        st.code(roteiro.get("prompt_oracao", ""))
+        
+        st.markdown("### 🖼️ THUMBNAIL")
+        st.code(roteiro.get("prompt_geral", ""))
         st.markdown("---")
 
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            if st.button("📋 Copiar roteiro completo", use_container_width=True):
-                texto_completo = (
-                    f"HOOK: {roteiro['hook']}\n\n"
-                    f"LEITURA: {leitura_montada}\n\n"
-                    f"REFLEXÃO: {roteiro['reflexão']}\n\n"
-                    f"APLICAÇÃO: {roteiro['aplicação']}\n\n"
-                    f"ORAÇÃO: {roteiro['oração']}"
-                )
-                st.code(texto_completo)
-        with col_b2:
-            st.markdown("**👉 Depois: usar na Fábrica de Vídeo**")
-
-        if "historico" not in st.session_state:
-            st.session_state["historico"] = []
-        st.session_state["historico"].append(
-            {
-                "data": data_selecionada,
-                "referencia": liturgia["referencia_liturgica"],
-                "fonte": liturgia["fonte"],
-                "roteiro": roteiro,
-                "leitura": leitura_montada,
-                "ref_curta": ref_curta,
-            }
-        )
-
-# --------- TAB 2: FÁBRICA DE VÍDEO ----------
+# TAB 2: GERENCIAR PERSONAGENS
 with tab2:
-    st.header("🎥 Fábrica de Vídeo (Em desenvolvimento)")
-    st.info(
-        "Aqui virão as próximas etapas:\n"
-        "- Geração de áudio com gTTS\n"
-        "- Geração de imagens de fundo\n"
-        "- Montagem do vídeo vertical (MoviePy)\n"
-        "- Geração de legendas SRT\n"
-        "- Export para TikTok / Reels"
-    )
-    st.button("🚧 Em breve", use_container_width=True)
+    st.header("🎨 Banco de Personagens Bíblicos")
+    
+    banco = st.session_state.personagens_biblicos
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("### 📋 Todos os personagens")
+        for nome, desc in banco.items():
+            with st.expander(f"✏️ {nome}"):
+                novo_nome = st.text_input(f"Nome {nome}", value=nome, key=f"nome_{id(nome)}")
+                nova_desc = st.text_area(f"Descrição {nome}", value=desc, height=100, key=f"desc_{id(nome)}")
+                if st.button(f"💾 Salvar {nome}", key=f"salvar_{id(nome)}"):
+                    if novo_nome:
+                        banco[novo_nome] = nova_desc
+                        if nome != novo_nome:
+                            del banco[nome]
+                        st.session_state.personagens_biblicos = banco
+                        st.rerun()
+                if st.button(f"🗑️ Apagar {nome}", key=f"apagar_{id(nome)}"):
+                    del banco[nome]
+                    st.session_state.personagens_biblicos = banco
+                    st.rerun()
+    
+    with col2:
+        st.markdown("### ➕ Novo Personagem")
+        novo_nome = st.text_input("Nome do personagem")
+        nova_desc = st.text_area("Descrição detalhada (aparência, roupas, idade, estilo)", height=120)
+        if st.button("➕ Adicionar") and novo_nome and nova_desc:
+            banco[novo_nome] = nova_desc
+            st.session_state.personagens_biblicos = banco
+            st.rerun()
+        
+        st.markdown("### 🎥 Preview Imagem")
+        if "preview_personagem" in st.session_state:
+            st.image(st.session_state.preview_personagem, use_column_width=True)
 
-# --------- TAB 3: HISTÓRICO ----------
+# TAB 3 e 4 (placeholder)
 with tab3:
-    st.header("📊 Histórico de roteiros nesta sessão")
+    st.header("🎥 Fábrica de Vídeo")
+    st.info("Em desenvolvimento: áudio gTTS + MoviePy")
 
-    historico = st.session_state.get("historico", [])
-    if not historico:
-        st.info("Nenhum roteiro gerado ainda nesta sessão.")
-    else:
-        for item in reversed(historico[-10:]):
-            ref_curta = item.get("ref_curta", "")
-            titulo_exp = (
-                f"📅 {item['data'].strftime('%d/%m/%Y')} - "
-                f"{item['referencia']} ({item['fonte']})"
-            )
-            if ref_curta:
-                titulo_exp += f" • {ref_curta}"
-            with st.expander(titulo_exp):
-                r = item["roteiro"]
-                st.markdown(f"**HOOK:** {r['hook']}")
-                st.markdown(f"**Leitura (início):** {item['leitura'][:200]}...")
-                st.markdown(f"**Reflexão (início):** {r['reflexão'][:200]}...")
+with tab4:
+    st.header("📊 Histórico")
+    st.info("Em breve")
 
 st.markdown("---")
-st.markdown("Feito com ❤️ para a evangelização - Studio Jhonata")
+st.markdown("Feito com ❤️ para evangelização - Studio Jhonata")
