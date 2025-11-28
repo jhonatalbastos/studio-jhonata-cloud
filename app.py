@@ -33,13 +33,48 @@ def inicializar_groq():
 # Limpeza do texto bíblico
 # =========================
 def limpar_texto_evangelho(texto: str) -> str:
-    """Remove números de versículos e espaços extras do texto do Evangelho."""
+    """Remove números de versículos colados e espaços extras."""
     if not texto:
         return ""
     texto_limpo = texto.replace("\n", " ").strip()
-    texto_limpo = re.sub(r"\b(\d{1,3})(?=[A-Za-zÁ-Úá-ú])", "", texto_limpo)  # 1Jesus, 20Quando...
+    texto_limpo = re.sub(r"\b(\d{1,3})(?=[A-Za-zÁ-Úá-ú])", "", texto_limpo)
     texto_limpo = re.sub(r"\s{2,}", " ", texto_limpo)
     return texto_limpo.strip()
+
+
+# =========================
+# Utilitário: extrair ref bíblica do título
+# Ex.: "Evangelho de Jesus Cristo segundo São Lucas 21, 29-33"
+# =========================
+def extrair_referencia_biblica(titulo: str):
+    """
+    Tenta extrair (evangelista, capítulo, versículos) do título.
+    Retorna dict ou None se não conseguir.
+    """
+    if not titulo:
+        return None
+
+    # Padrão aproximado: "... segundo São Lucas 21, 29-33"
+    m = re.search(
+        r"segundo\s+São\s+([A-Za-zÁ-Úá-ú]+)\s+(\d+),\s*([\d\-–]+)",
+        titulo,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+
+    evangelista = m.group(1).strip()
+    capitulo = m.group(2).strip()
+    versiculos_raw = m.group(3).strip()
+
+    # Transformar "29-33" em "29 a 33"
+    versiculos = versiculos_raw.replace("-", " a ").replace("–", " a ")
+
+    return {
+        "evangelista": evangelista,
+        "capitulo": capitulo,
+        "versiculos": versiculos,
+    }
 
 
 # =========================
@@ -75,22 +110,23 @@ def buscar_liturgia_api1(data_str: str):
             return None
 
         texto_limpo = limpar_texto_evangelho(texto)
+        ref_biblica = extrair_referencia_biblica(titulo)
 
         return {
             "fonte": "api-liturgia-diaria.vercel.app",
             "titulo": titulo,
             "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
+            "ref_biblica": ref_biblica,
         }
     except Exception:
         return None
 
 
 # =========================
-# API 2 – Railway (Dancrf /liturgia-diaria) – fallback
+# API 2 – Railway (fallback)
 # =========================
 def buscar_liturgia_api2(data_str: str):
-    # Documentada em github.com/Dancrf/liturgia-diaria [web:56][web:92]
     url = f"https://liturgia.up.railway.app/v2/{data_str}"
     try:
         resp = requests.get(url, timeout=10)
@@ -111,12 +147,14 @@ def buscar_liturgia_api2(data_str: str):
 
         texto_limpo = limpar_texto_evangelho(texto)
         referencia_liturgica = ref or titulo or "Evangelho do dia"
+        ref_biblica = extrair_referencia_biblica(titulo)
 
         return {
             "fonte": "liturgia.up.railway.app",
             "titulo": titulo,
             "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
+            "ref_biblica": ref_biblica,
         }
     except Exception:
         return None
@@ -126,10 +164,6 @@ def buscar_liturgia_api2(data_str: str):
 # Fallback – Groq gera Evangelho INTEIRO
 # =========================
 def gerar_evangelho_com_groq(data_str: str):
-    """
-    Quando nenhuma API de liturgia responde, pede ao Groq para gerar
-    UM texto completo de Evangelho para a liturgia católica daquele dia.
-    """
     client = inicializar_groq()
 
     system_prompt = (
@@ -166,12 +200,14 @@ def gerar_evangelho_com_groq(data_str: str):
         texto = texto_match.group(1).strip() if texto_match else conteudo
 
         texto_limpo = limpar_texto_evangelho(texto)
+        ref_biblica = extrair_referencia_biblica(referencia_liturgica)
 
         return {
             "fonte": "groq-fallback",
-            "titulo": "Evangelho do dia (gerado por IA)",
+            "titulo": referencia_liturgica,
             "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
+            "ref_biblica": ref_biblica,
         }
     except Exception as e:
         st.error(f"❌ Falha também no fallback do Groq para gerar o Evangelho: {e}")
@@ -179,15 +215,9 @@ def gerar_evangelho_com_groq(data_str: str):
 
 
 # =========================
-# Função unificada de liturgia (2 APIs + Groq)
+# Função unificada de liturgia
 # =========================
 def obter_evangelho_com_fallback(data_str: str):
-    """
-    Ordem:
-    1) api-liturgia-diaria.vercel.app
-    2) liturgia.up.railway.app
-    3) Groq gera Evangelho inteiro
-    """
     ev = buscar_liturgia_api1(data_str)
     if ev:
         st.info("📡 Usando liturgia de api-liturgia-diaria.vercel.app")
@@ -208,14 +238,9 @@ def obter_evangelho_com_fallback(data_str: str):
 
 
 # =========================
-# Roteiro com Groq (HOOK + REFLEXÃO/APLICAÇÃO/ORAÇÃO)
-# LEITURA montada pelo código com fórmula fixa
+# Groq gera HOOK / REFLEXÃO / APLICAÇÃO / ORAÇÃO
 # =========================
 def gerar_roteiro_com_groq(texto_evangelho: str, referencia_liturgica: str):
-    """
-    Gera HOOK, REFLEXÃO, APLICAÇÃO e ORAÇÃO usando Groq.
-    A LEITURA é montada localmente com fórmula fixa.
-    """
     try:
         client = inicializar_groq()
         texto_limpo = limpar_texto_evangelho(texto_evangelho)
@@ -226,21 +251,20 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia_liturgica: str):
             "- Você deve gerar EXATAMENTE 4 partes, nesta ordem: HOOK, REFLEXÃO, APLICAÇÃO, ORAÇÃO.\n"
             "- Não gere a LEITURA; ela será montada pelo sistema.\n"
             "- Cada parte deve conter SOMENTE o conteúdo daquela parte.\n\n"
-            "Definições:\n"
-            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho, sem leitura.\n"
-            "REFLEXÃO: comentário devocional de 20–25 segundos (2–3 frases) explicando o sentido espiritual.\n"
-            "APLICAÇÃO: como viver esse Evangelho HOJE, em 20–25 segundos, bem prática.\n"
-            "ORAÇÃO: oração curta (20–25 segundos), simples e sincera, falando com Deus.\n\n"
-            "Formato exato da RESPOSTA (sem nenhum texto antes ou depois):\n"
-            "HOOK: [texto do hook]\n"
-            "REFLEXÃO: [apenas a reflexão]\n"
-            "APLICAÇÃO: [apenas a aplicação]\n"
-            "ORAÇÃO: [apenas a oração]\n"
+            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho.\n"
+            "REFLEXÃO: comentário devocional de 20–25 segundos (2–3 frases).\n"
+            "APLICAÇÃO: como viver esse Evangelho HOJE, em 20–25 segundos.\n"
+            "ORAÇÃO: oração curta (20–25 segundos), simples e sincera.\n\n"
+            "Formato exato da resposta:\n"
+            "HOOK: [texto]\n"
+            "REFLEXÃO: [texto]\n"
+            "APLICAÇÃO: [texto]\n"
+            "ORAÇÃO: [texto]\n"
         )
 
         user_prompt = (
             f"Evangelho do dia (referência litúrgica): {referencia_liturgica}\n\n"
-            f"Texto (sem números de versículos):\n{texto_limpo[:2000]}\n\n"
+            f"Texto:\n{texto_limpo[:2000]}\n\n"
             "Gere o roteiro completo seguindo exatamente o formato e as regras acima."
         )
 
@@ -273,14 +297,28 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia_liturgica: str):
         return None
 
 
-def montar_leitura_com_formula(texto_evangelho: str, referencia_biblica: str | None = None):
+# =========================
+# Montar LEITURA com fórmula fixa
+# =========================
+def montar_leitura_com_formula(texto_evangelho: str, ref_biblica: dict | None):
     """
     Monta a LEITURA com fórmula fixa:
-    Proclamação + texto + Palavra da Salvação.
+    Proclamação + capítulo/versículos (se existirem) + texto + Palavra da Salvação.
     """
-    abertura = "Proclamação do Evangelho de Jesus Cristo, segundo São Lucas."
-    if referencia_biblica:
-        abertura = f"Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. {referencia_biblica}."
+    if ref_biblica:
+        abertura = (
+            f"Proclamação do Evangelho de Jesus Cristo, segundo São "
+            f"{ref_biblica['evangelista']}, "
+            f"Capítulo {ref_biblica['capitulo']}, "
+            f"versículos {ref_biblica['versiculos']}. "
+            "Glória a vós, Senhor!"
+        )
+    else:
+        abertura = (
+            "Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. "
+            "Glória a vós, Senhor!"
+        )
+
     fechamento = "Palavra da Salvação. Glória a vós, Senhor!"
     return f"{abertura} {texto_evangelho} {fechamento}"
 
@@ -340,8 +378,7 @@ with tab1:
             st.stop()
 
         leitura_montada = montar_leitura_com_formula(
-            liturgia["texto"],
-            referencia_biblica=None,  # se quiser colocar Lc 21,29-33, precisaria vir da API
+            liturgia["texto"], liturgia.get("ref_biblica")
         )
 
         st.markdown("## 📖 Roteiro pronto para gravar")
@@ -366,7 +403,7 @@ with tab1:
             st.markdown(roteiro.get("aplicação", ""))
 
         st.markdown("### 🙏 ORAÇÃO (20–25s)")
-        st.markdown(roteiro.get("oração", ""))
+        st.markmarkdown(roteiro.get("oração", ""))
         st.markdown("---")
 
         col_b1, col_b2 = st.columns(2)
