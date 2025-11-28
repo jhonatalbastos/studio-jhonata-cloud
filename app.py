@@ -460,7 +460,7 @@ with tab3:
             ):
                 r = item["roteiro"]
                 st.markdown(f"**HOOK:** {r['hook']}")
-                st.markmarkdown(f"**Leitura (início):** {item['leitura'][:200]}...")
+                st.markdown(f"**Leitura (início):** {item['leitura'][:200]}...")
                 st.markdown(f"**Reflexão (início):** {r['reflexão'][:200]}...")
 
 st.markdown("---")
