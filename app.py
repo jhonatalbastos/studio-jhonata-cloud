@@ -155,7 +155,7 @@ def gerar_evangelho_com_groq(data_str: str):
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.4,
-            max_completion_tokens=800,
+            max_tokens=800,
         )
         conteudo = resp.choices[0].message.content
 
@@ -240,13 +240,13 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
         )
 
         resposta = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # modelo atualizado [web:133]
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_completion_tokens=1200,
+            max_tokens=1200,
         )
 
         texto_gerado = resposta.choices[0].message.content
