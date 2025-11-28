@@ -84,7 +84,6 @@ def formatar_referencia_curta(ref_biblica):
 # ANÁLISE DE PERSONAGENS + BANCO
 # =========================
 def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
-    """Groq analisa quais personagens aparecem e cria novos se necessário"""
     client = inicializar_groq()
     
     system_prompt = """Você é especialista em análise bíblica. Analise o texto e identifique TODOS os personagens bíblicos mencionados.
@@ -127,7 +126,7 @@ def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
                 if "|" in novo:
                     nome, desc = novo.split("|", 1)
                     personagens_detectados[nome.strip()] = desc.strip()
-                    banco_personagens[nome.strip()] = desc.strip()  # Salva no banco
+                    banco_personagens[nome.strip()] = desc.strip()
         
         return personagens_detectados
     except:
@@ -135,7 +134,7 @@ def analisar_personagens_groq(texto_evangelho: str, banco_personagens: dict):
 
 
 # =========================
-# APIs Liturgia (mantidas iguais)
+# APIs Liturgia
 # =========================
 def buscar_liturgia_api1(data_str: str):
     url = f"https://api-liturgia-diaria.vercel.app/?date={data_str}"
@@ -180,13 +179,12 @@ def buscar_liturgia_api2(data_str: str):
         if not texto:
             return None
         texto_limpo = limpar_texto_evangelho(texto)
-        ref_biblica = None
         return {
             "fonte": "liturgia.up.railway.app",
             "titulo": "Evangelho do dia",
             "referencia_liturgica": "Evangelho do dia",
             "texto": texto_limpo,
-            "ref_biblica": ref_biblica,
+            "ref_biblica": None,
         }
     except:
         return None
@@ -195,11 +193,11 @@ def buscar_liturgia_api2(data_str: str):
 def obter_evangelho_com_fallback(data_str: str):
     ev = buscar_liturgia_api1(data_str)
     if ev:
-        st.info("📡 Usando liturgia de api-liturgia-diaria.vercel.app")
+        st.info("📡 Usando api-liturgia-diaria.vercel.app")
         return ev
     ev = buscar_liturgia_api2(data_str)
     if ev:
-        st.info("📡 Usando liturgia de liturgia.up.railway.app")
+        st.info("📡 Usando liturgia.up.railway.app")
         return ev
     st.error("❌ Não foi possível obter o Evangelho")
     return None
@@ -249,11 +247,17 @@ PROMPT_GERAL: [prompt para thumbnail/capa]"""
         secoes = ["HOOK", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
         
         for secao in secoes:
-            for tipo in [secao, f"PROMPT_{secao}"]:
-                padrao = rf"{tipo}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
-                match = re.search(padrao, texto_gerado, re.DOTALL | re.IGNORECASE)
-                if match:
-                    partes[f"{tipo.lower().replace('prompt_', 'prompt_')[:-1 if tipo.endswith('_') else None}"] = match.group(1).strip()
+            # Texto da seção
+            padrao_texto = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT|$)"
+            match_texto = re.search(padrao_texto, texto_gerado, re.DOTALL | re.IGNORECASE)
+            if match_texto:
+                partes[secao.lower()] = match_texto.group(1).strip()
+            
+            # Prompt da seção
+            padrao_prompt = rf"PROMPT_{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
+            match_prompt = re.search(padrao_prompt, texto_gerado, re.DOTALL | re.IGNORECASE)
+            if match_prompt:
+                partes[f"prompt_{secao.lower()}"] = match_prompt.group(1).strip()
         
         # Prompt geral
         m = re.search(r"PROMPT_GERAL:\s*(.+)", texto_gerado, re.DOTALL | re.IGNORECASE)
@@ -366,7 +370,7 @@ with tab1:
             st.markdown("### 🌟 APLICAÇÃO")
             st.markdown(roteiro.get("aplicação", ""))
             st.markdown("**📸 Prompt:**")
-            st.code(roteiro.get("prompt_aplicacao", ""))
+            st.code(roteiro.get("prompt_aplicação", ""))
         
         st.markdown("### 🙏 ORAÇÃO")
         st.markdown(roteiro.get("oração", ""))
@@ -381,40 +385,36 @@ with tab1:
 with tab2:
     st.header("🎨 Banco de Personagens Bíblicos")
     
-    banco = st.session_state.personagens_biblicos
+    banco = st.session_state.personagens_biblicos.copy()
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
         st.markdown("### 📋 Todos os personagens")
-        for nome, desc in banco.items():
+        for i, (nome, desc) in enumerate(banco.items()):
             with st.expander(f"✏️ {nome}"):
-                novo_nome = st.text_input(f"Nome {nome}", value=nome, key=f"nome_{id(nome)}")
-                nova_desc = st.text_area(f"Descrição {nome}", value=desc, height=100, key=f"desc_{id(nome)}")
-                if st.button(f"💾 Salvar {nome}", key=f"salvar_{id(nome)}"):
-                    if novo_nome:
-                        banco[novo_nome] = nova_desc
-                        if nome != novo_nome:
-                            del banco[nome]
-                        st.session_state.personagens_biblicos = banco
+                novo_nome = st.text_input(f"Nome {i}", value=nome, key=f"nome_{i}")
+                nova_desc = st.text_area(f"Descrição {i}", value=desc, height=100, key=f"desc_{i}")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button(f"💾 Salvar", key=f"salvar_{i}"):
+                        if novo_nome and nova_desc:
+                            if novo_nome in st.session_state.personagens_biblicos and novo_nome != nome:
+                                del st.session_state.personagens_biblicos[novo_nome]
+                            st.session_state.personagens_biblicos[novo_nome] = nova_desc
+                            st.rerun()
+                with col_b:
+                    if st.button(f"🗑️ Apagar", key=f"apagar_{i}"):
+                        del st.session_state.personagens_biblicos[nome]
                         st.rerun()
-                if st.button(f"🗑️ Apagar {nome}", key=f"apagar_{id(nome)}"):
-                    del banco[nome]
-                    st.session_state.personagens_biblicos = banco
-                    st.rerun()
     
     with col2:
         st.markdown("### ➕ Novo Personagem")
-        novo_nome = st.text_input("Nome do personagem")
-        nova_desc = st.text_area("Descrição detalhada (aparência, roupas, idade, estilo)", height=120)
+        novo_nome = st.text_input("Nome do personagem", key="novo_nome")
+        nova_desc = st.text_area("Descrição detalhada (aparência, roupas, idade, estilo)", height=120, key="nova_desc")
         if st.button("➕ Adicionar") and novo_nome and nova_desc:
-            banco[novo_nome] = nova_desc
-            st.session_state.personagens_biblicos = banco
+            st.session_state.personagens_biblicos[novo_nome] = nova_desc
             st.rerun()
-        
-        st.markdown("### 🎥 Preview Imagem")
-        if "preview_personagem" in st.session_state:
-            st.image(st.session_state.preview_personagem, use_column_width=True)
 
 # TAB 3 e 4 (placeholder)
 with tab3:
