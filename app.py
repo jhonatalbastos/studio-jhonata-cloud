@@ -403,7 +403,7 @@ with tab1:
             st.markdown(roteiro.get("aplicação", ""))
 
         st.markdown("### 🙏 ORAÇÃO (20–25s)")
-        st.markmarkdown(roteiro.get("oração", ""))
+        st.markdown(roteiro.get("oração", ""))
         st.markdown("---")
 
         col_b1, col_b2 = st.columns(2)
@@ -460,7 +460,7 @@ with tab3:
             ):
                 r = item["roteiro"]
                 st.markdown(f"**HOOK:** {r['hook']}")
-                st.markdown(f"**Leitura (início):** {item['leitura'][:200]}...")
+                st.markmarkdown(f"**Leitura (início):** {item['leitura'][:200]}...")
                 st.markdown(f"**Reflexão (início):** {r['reflexão'][:200]}...")
 
 st.markdown("---")
