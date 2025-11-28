@@ -208,35 +208,41 @@ def obter_evangelho_com_fallback(data_str: str):
 
 
 # =========================
-# Roteiro com Groq (Hook + 4 partes)
+# Roteiro com Groq (Hook + 4 partes) – PROMPT AJUSTADO
 # =========================
 def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
-    """Gera HOOK, Leitura, Reflexão, Aplicação e Oração usando Groq."""
+    """
+    Gera HOOK, LEITURA, REFLEXÃO, APLICAÇÃO e ORAÇÃO usando Groq,
+    garantindo que cada parte venha isolada (sem repetir as outras).
+    """
     try:
         client = inicializar_groq()
         texto_limpo = limpar_texto_evangelho(texto_evangelho)
 
         system_prompt = (
             "Você cria roteiros católicos para vídeos curtos (TikTok/Reels) em português do Brasil.\n\n"
-            "Sempre responda EXATAMENTE neste formato, com 5 partes, cada uma iniciando com o título em maiúsculas:\n"
-            "HOOK: uma ou duas frases curtas (5-8 segundos) que criem curiosidade sobre o Evangelho.\n"
-            "LEITURA: 'Proclamação do Evangelho de Jesus Cristo, segundo [evangelista]. [referência]. Glória a vós, Senhor!' "
-            "+ o texto limpo do Evangelho adaptado para leitura em vídeo + 'Palavra da Salvação. Glória a vós, Senhor!'.\n"
-            "REFLEXÃO: meditação devocional de 20-25 segundos (2-3 frases) conectando o Evangelho com a vida espiritual.\n"
-            "APLICAÇÃO: 'Evangelho na sua vida hoje' em 20-25 segundos, bem prática.\n"
-            "ORAÇÃO: oração curta (20-25 segundos), simples e sincera, inspirada no Evangelho.\n\n"
-            "Formato exato da resposta (sem comentários adicionais):\n"
-            "HOOK: ...\n"
-            "LEITURA: ...\n"
-            "REFLEXÃO: ...\n"
-            "APLICAÇÃO: ...\n"
-            "ORAÇÃO: ..."
+            "IMPORTANTE:\n"
+            "- Você deve gerar EXATAMENTE 5 partes, nesta ordem: HOOK, LEITURA, REFLEXÃO, APLICAÇÃO, ORAÇÃO.\n"
+            "- Cada parte deve conter SOMENTE o conteúdo daquela parte, NUNCA repita as outras partes dentro dela.\n"
+            "- Não repita as palavras HOOK, LEITURA, REFLEXÃO, APLICAÇÃO ou ORAÇÃO dentro do texto das outras partes.\n\n"
+            "Definições:\n"
+            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho, SEM incluir a leitura nem a reflexão.\n"
+            "LEITURA: APENAS a fórmula de abertura + texto do Evangelho adaptado para leitura + fórmula de fechamento, sem reflexão nem aplicação.\n"
+            "REFLEXÃO: APENAS um comentário devocional de 20–25 segundos (2–3 frases) explicando o sentido espiritual do Evangelho.\n"
+            "APLICAÇÃO: APENAS como viver esse Evangelho HOJE, em 20–25 segundos, sem repetir a reflexão inteira.\n"
+            "ORAÇÃO: APENAS uma oração curta (20–25 segundos), simples e sincera, falando com Deus.\n\n"
+            "Formato exato da RESPOSTA (sem nenhum texto antes ou depois):\n"
+            "HOOK: [texto do hook]\n"
+            "LEITURA: [apenas a leitura com abertura e fechamento]\n"
+            "REFLEXÃO: [apenas a reflexão]\n"
+            "APLICAÇÃO: [apenas a aplicação]\n"
+            "ORAÇÃO: [apenas a oração]\n"
         )
 
         user_prompt = (
             f"Evangelho do dia (referência litúrgica): {referencia}\n\n"
             f"Texto (sem números de versículos):\n{texto_limpo[:2000]}\n\n"
-            "Gere o roteiro completo no formato exato pedido."
+            "Gere o roteiro completo seguindo exatamente o formato e as regras acima."
         )
 
         resposta = client.chat.completions.create(
@@ -254,7 +260,7 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
         partes = {}
         secoes = ["HOOK", "LEITURA", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
         for secao in secoes:
-            padrao = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{3,}:\s*|$)"
+            padrao = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
             match = re.search(padrao, texto_gerado, flags=re.DOTALL)
             if match:
                 partes[secao.lower()] = match.group(1).strip()
