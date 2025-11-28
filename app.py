@@ -64,7 +64,7 @@ def buscar_liturgia_api1(data_str: str):
         if not gospel:
             return None
 
-        referencia = today.get("entry_title", "").strip() or "Evangelho do dia"
+        referencia_liturgica = today.get("entry_title", "").strip() or "Evangelho do dia"
         titulo = (
             gospel.get("head_title", "").strip()
             or gospel.get("title", "").strip()
@@ -79,7 +79,7 @@ def buscar_liturgia_api1(data_str: str):
         return {
             "fonte": "api-liturgia-diaria.vercel.app",
             "titulo": titulo,
-            "referencia": referencia,
+            "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
         }
     except Exception:
@@ -110,12 +110,12 @@ def buscar_liturgia_api2(data_str: str):
             return None
 
         texto_limpo = limpar_texto_evangelho(texto)
-        referencia = ref or titulo or "Evangelho do dia"
+        referencia_liturgica = ref or titulo or "Evangelho do dia"
 
         return {
             "fonte": "liturgia.up.railway.app",
             "titulo": titulo,
-            "referencia": referencia,
+            "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
         }
     except Exception:
@@ -149,7 +149,7 @@ def gerar_evangelho_com_groq(data_str: str):
 
     try:
         resp = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # modelo atualizado [web:133]
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -162,7 +162,7 @@ def gerar_evangelho_com_groq(data_str: str):
         ref_match = re.search(r"REFERENCIA:\s*(.+)", conteudo)
         texto_match = re.search(r"TEXTO:\s*(.+)", conteudo, flags=re.DOTALL)
 
-        referencia = ref_match.group(1).strip() if ref_match else "Evangelho do dia"
+        referencia_liturgica = ref_match.group(1).strip() if ref_match else "Evangelho do dia"
         texto = texto_match.group(1).strip() if texto_match else conteudo
 
         texto_limpo = limpar_texto_evangelho(texto)
@@ -170,7 +170,7 @@ def gerar_evangelho_com_groq(data_str: str):
         return {
             "fonte": "groq-fallback",
             "titulo": "Evangelho do dia (gerado por IA)",
-            "referencia": referencia,
+            "referencia_liturgica": referencia_liturgica,
             "texto": texto_limpo,
         }
     except Exception as e:
@@ -208,12 +208,13 @@ def obter_evangelho_com_fallback(data_str: str):
 
 
 # =========================
-# Roteiro com Groq (Hook + 4 partes) – PROMPT AJUSTADO
+# Roteiro com Groq (HOOK + REFLEXÃO/APLICAÇÃO/ORAÇÃO)
+# LEITURA montada pelo código com fórmula fixa
 # =========================
-def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
+def gerar_roteiro_com_groq(texto_evangelho: str, referencia_liturgica: str):
     """
-    Gera HOOK, LEITURA, REFLEXÃO, APLICAÇÃO e ORAÇÃO usando Groq,
-    garantindo que cada parte venha isolada (sem repetir as outras).
+    Gera HOOK, REFLEXÃO, APLICAÇÃO e ORAÇÃO usando Groq.
+    A LEITURA é montada localmente com fórmula fixa.
     """
     try:
         client = inicializar_groq()
@@ -222,25 +223,23 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
         system_prompt = (
             "Você cria roteiros católicos para vídeos curtos (TikTok/Reels) em português do Brasil.\n\n"
             "IMPORTANTE:\n"
-            "- Você deve gerar EXATAMENTE 5 partes, nesta ordem: HOOK, LEITURA, REFLEXÃO, APLICAÇÃO, ORAÇÃO.\n"
-            "- Cada parte deve conter SOMENTE o conteúdo daquela parte, NUNCA repita as outras partes dentro dela.\n"
-            "- Não repita as palavras HOOK, LEITURA, REFLEXÃO, APLICAÇÃO ou ORAÇÃO dentro do texto das outras partes.\n\n"
+            "- Você deve gerar EXATAMENTE 4 partes, nesta ordem: HOOK, REFLEXÃO, APLICAÇÃO, ORAÇÃO.\n"
+            "- Não gere a LEITURA; ela será montada pelo sistema.\n"
+            "- Cada parte deve conter SOMENTE o conteúdo daquela parte.\n\n"
             "Definições:\n"
-            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho, SEM incluir a leitura nem a reflexão.\n"
-            "LEITURA: APENAS a fórmula de abertura + texto do Evangelho adaptado para leitura + fórmula de fechamento, sem reflexão nem aplicação.\n"
-            "REFLEXÃO: APENAS um comentário devocional de 20–25 segundos (2–3 frases) explicando o sentido espiritual do Evangelho.\n"
-            "APLICAÇÃO: APENAS como viver esse Evangelho HOJE, em 20–25 segundos, sem repetir a reflexão inteira.\n"
-            "ORAÇÃO: APENAS uma oração curta (20–25 segundos), simples e sincera, falando com Deus.\n\n"
+            "HOOK: 1–2 frases curtas (5–8 segundos) que criem curiosidade sobre o Evangelho, sem leitura.\n"
+            "REFLEXÃO: comentário devocional de 20–25 segundos (2–3 frases) explicando o sentido espiritual.\n"
+            "APLICAÇÃO: como viver esse Evangelho HOJE, em 20–25 segundos, bem prática.\n"
+            "ORAÇÃO: oração curta (20–25 segundos), simples e sincera, falando com Deus.\n\n"
             "Formato exato da RESPOSTA (sem nenhum texto antes ou depois):\n"
             "HOOK: [texto do hook]\n"
-            "LEITURA: [apenas a leitura com abertura e fechamento]\n"
             "REFLEXÃO: [apenas a reflexão]\n"
             "APLICAÇÃO: [apenas a aplicação]\n"
             "ORAÇÃO: [apenas a oração]\n"
         )
 
         user_prompt = (
-            f"Evangelho do dia (referência litúrgica): {referencia}\n\n"
+            f"Evangelho do dia (referência litúrgica): {referencia_liturgica}\n\n"
             f"Texto (sem números de versículos):\n{texto_limpo[:2000]}\n\n"
             "Gere o roteiro completo seguindo exatamente o formato e as regras acima."
         )
@@ -252,13 +251,13 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.7,
-            max_tokens=1200,
+            max_tokens=900,
         )
 
         texto_gerado = resposta.choices[0].message.content
 
         partes = {}
-        secoes = ["HOOK", "LEITURA", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
+        secoes = ["HOOK", "REFLEXÃO", "APLICAÇÃO", "ORAÇÃO"]
         for secao in secoes:
             padrao = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|$)"
             match = re.search(padrao, texto_gerado, flags=re.DOTALL)
@@ -272,6 +271,18 @@ def gerar_roteiro_com_groq(texto_evangelho: str, referencia: str):
     except Exception as e:
         st.error(f"❌ Erro ao gerar roteiro com Groq: {e}")
         return None
+
+
+def montar_leitura_com_formula(texto_evangelho: str, referencia_biblica: str | None = None):
+    """
+    Monta a LEITURA com fórmula fixa:
+    Proclamação + texto + Palavra da Salvação.
+    """
+    abertura = "Proclamação do Evangelho de Jesus Cristo, segundo São Lucas."
+    if referencia_biblica:
+        abertura = f"Proclamação do Evangelho de Jesus Cristo, segundo São Lucas. {referencia_biblica}."
+    fechamento = "Palavra da Salvação. Glória a vós, Senhor!"
+    return f"{abertura} {texto_evangelho} {fechamento}"
 
 
 # =========================
@@ -316,17 +327,22 @@ with tab1:
             st.stop()
 
         st.success(
-            f"✅ Evangelho utilizado: **{liturgia['referencia']}** "
+            f"✅ Evangelho utilizado: **{liturgia['referencia_liturgica']}** "
             f"({liturgia['fonte']})"
         )
 
         with st.spinner("🤖 Gerando roteiro com Groq..."):
             roteiro = gerar_roteiro_com_groq(
-                liturgia["texto"], liturgia["referencia"]
+                liturgia["texto"], liturgia["referencia_liturgica"]
             )
 
         if not roteiro:
             st.stop()
+
+        leitura_montada = montar_leitura_com_formula(
+            liturgia["texto"],
+            referencia_biblica=None,  # se quiser colocar Lc 21,29-33, precisaria vir da API
+        )
 
         st.markdown("## 📖 Roteiro pronto para gravar")
         st.markdown("---")
@@ -343,7 +359,7 @@ with tab1:
 
         with col_dir:
             st.markdown("### 📖 LEITURA")
-            st.markdown(roteiro.get("leitura", ""))
+            st.markdown(leitura_montada)
             st.markdown("---")
 
             st.markdown("### 🌟 APLICAÇÃO (20–25s)")
@@ -358,7 +374,7 @@ with tab1:
             if st.button("📋 Copiar roteiro completo", use_container_width=True):
                 texto_completo = (
                     f"HOOK: {roteiro['hook']}\n\n"
-                    f"LEITURA: {roteiro['leitura']}\n\n"
+                    f"LEITURA: {leitura_montada}\n\n"
                     f"REFLEXÃO: {roteiro['reflexão']}\n\n"
                     f"APLICAÇÃO: {roteiro['aplicação']}\n\n"
                     f"ORAÇÃO: {roteiro['oração']}"
@@ -372,9 +388,10 @@ with tab1:
         st.session_state["historico"].append(
             {
                 "data": data_selecionada,
-                "referencia": liturgia["referencia"],
+                "referencia": liturgia["referencia_liturgica"],
                 "fonte": liturgia["fonte"],
                 "roteiro": roteiro,
+                "leitura": leitura_montada,
             }
         )
 
@@ -406,7 +423,7 @@ with tab3:
             ):
                 r = item["roteiro"]
                 st.markdown(f"**HOOK:** {r['hook']}")
-                st.markdown(f"**Leitura (início):** {r['leitura'][:200]}...")
+                st.markdown(f"**Leitura (início):** {item['leitura'][:200]}...")
                 st.markdown(f"**Reflexão (início):** {r['reflexão'][:200]}...")
 
 st.markdown("---")
