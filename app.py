@@ -283,13 +283,13 @@ PROMPT_GERAL: [prompt para thumbnail/capa]"""
 
         for secao in secoes:
             # Texto da seção
-            padrao_texto = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT|$)"
+            padrao_texto = rf"{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
             match_texto = re.search(padrao_texto, texto_gerado, re.DOTALL | re.IGNORECASE)
             if match_texto:
                 partes[secao.lower()] = match_texto.group(1).strip()
 
             # Prompt da seção
-            padrao_prompt = rf"PROMPT_{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT|$)"
+            padrao_prompt = rf"PROMPT_{secao}:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{{3,}}:\s*|\nPROMPT_|$)"
             match_prompt = re.search(
                 padrao_prompt, texto_gerado, re.DOTALL | re.IGNORECASE
             )
@@ -298,7 +298,9 @@ PROMPT_GERAL: [prompt para thumbnail/capa]"""
 
         # Prompt da leitura
         m_leitura = re.search(
-            r"PROMPT_LEITURA:\s*(.+)", texto_gerado, re.DOTALL | re.IGNORECASE
+            r"PROMPT_LEITURA:\s*(.*?)(?=\n[A-ZÁÉÍÓÚÃÕÇ]{3,}:\s*|\nPROMPT_|$)",
+            texto_gerado,
+            re.DOTALL | re.IGNORECASE,
         )
         if m_leitura:
             partes["prompt_leitura"] = m_leitura.group(1).strip()
@@ -463,7 +465,11 @@ with tab2:
                     if st.button("💾 Salvar", key=f"salvar_{i}"):
                         if novo_nome and nova_desc:
                             # remover antigo se renomear
-                            if novo_nome != nome and novo_nome in st.session_state.personagens_biblicos:
+                            if (
+                                novo_nome != nome
+                                and novo_nome
+                                in st.session_state.personagens_biblicos
+                            ):
                                 del st.session_state.personagens_biblicos[novo_nome]
                             del st.session_state.personagens_biblicos[nome]
                             st.session_state.personagens_biblicos[novo_nome] = nova_desc
